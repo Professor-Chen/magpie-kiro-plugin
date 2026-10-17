@@ -13,7 +13,7 @@ published as its own repository, not as a fork.
 
 ## Signing in
 
-- **Kiro (Google, GitHub, AWS Builder ID, IAM Identity Center)**: the Kiro
+- **Kiro（Google、GitHub、AWS Builder ID、IAM Identity Center）**: the Kiro
   IDE's own sign-in.
   - Kiro's page (`app.kiro.dev/signin`) sends the browser back to one of
     the ports the IDE listens on (3128, 4649, 6588, 8008, 9091, 49153,
@@ -28,7 +28,7 @@ published as its own repository, not as a fork.
     and its plan is read from the same call.
   - A company's own identity provider (`external_idp`) is not supported
     here. Sign in with `kiro-cli login` and use the next method instead.
-- **Kiro CLI's or Kiro IDE's sign-in**: uses the account kiro-cli is signed
+- **使用 Kiro CLI 或 Kiro IDE 的登录**: uses the account kiro-cli is signed
   in to, or else the Kiro IDE's. Nothing is copied. It is read each time
   from where they keep it:
   - kiro-cli: its SQLite database's `auth_kv` table.
@@ -40,12 +40,16 @@ published as its own repository, not as a fork.
   kiro-cli refreshes its own token first (`kiro-cli debug refresh-auth-token`).
   A token the plugin refreshes itself is written back, so kiro-cli and the
   IDE go on with it.
-- **Kiro API key (`ksk_…`)**: sent with `tokentype: API_KEY`. Its profile is
+- **Kiro API Key（ksk_…）**: sent with `tokentype: API_KEY`. Its profile is
   found with `GetProfile`.
-- **Import an exported account (JSON)**: in magpie, choose the file or
-  paste it. OpenCode asks for the JSON or the path of the file. Accepted
-  exports are Kiro Account Manager, Cockpit, kiro.rs's `credentials.json`,
-  and the IDE's `kiro-auth-token.json`. Details are under
+- **导入导出的账号（JSON）**: in magpie the next step is two buttons,
+  选择文件… and 粘贴 JSON. 选择文件… opens the system file dialog. 粘贴 JSON
+  is the text box, which also takes a file path. The installed magpie only
+  draws buttons and a text box, and it shows this plugin's words as they
+  are written, so those labels are Chinese. OpenCode asks for the JSON or
+  the path of the file. Accepted exports are Kiro Account Manager,
+  Cockpit, kiro.rs's `credentials.json`, and the IDE's
+  `kiro-auth-token.json`. Details are under
   [Importing an exported account](#importing-an-exported-account-this-fork).
 
 A browser sign-in is kept where OpenCode keeps sign-ins (`auth.json`; in
@@ -116,8 +120,10 @@ and Auto have the thinking variants.
 
 ## Importing an exported account (this fork)
 
-The sign-in method *Import an exported account (JSON)* takes the JSON, or
-the path of the file holding it, as exported by:
+The sign-in method *导入导出的账号（JSON）* takes the JSON, or the path of
+the file holding it. In magpie, 选择文件… opens the system file dialog and
+粘贴 JSON takes the text or a path. OpenCode asks for that text or path.
+Accepted exports:
 
 - Kiro Account Manager: `{version, exportedAt, accounts: [{email, credentials: {…}, machineId, status}]}`
 - Cockpit: `{version: "cockpit-kiro-import", accounts: [{email, auth: {…}, machineId, status}]}`
@@ -129,8 +135,8 @@ The credentials read are `accessToken`, `refreshToken`, `expiresAt`
 `idc`; `builder-id` and `iam` are taken for `idc`), `provider`, `clientId`,
 `clientSecret`, `profileArn`, and the account's `machineId`. An account
 whose `status` isn't active, or with no refresh token, is skipped with why.
-Passwords and notes an export holds are never kept. The second question
-picks which account of a multi-account export signs in (1 for the first).
+Passwords and notes an export holds are never kept. When the export holds
+several accounts, the next question picks which one signs in (1 for the first).
 The token is refreshed before the account is kept, so a spent export fails
 at once rather than at the first request.
 

@@ -2203,15 +2203,102 @@ async function ownSignIn() {
 // signs in the first active one here and keeps the rest (client.auth.set
 // can't make more accounts), naming them so each can be imported with its
 // number. The tokens are checked by a refresh before they are kept.
+//
+// The installed magpie only draws a select (buttons) or a text box. It
+// has no file control, and a question it does not know is drawn as text.
+// Choosing a file therefore opens the system dialog from here, while that
+// prompt request is in flight. The dialog has to finish inside magpie's
+// one-minute prompt; the wait below stops short of that and offers the
+// paste box instead. The file's text is kept aside (pendingImport): ask
+// can only hand back the next question, not fill inputs itself.
+let pendingImport = ""
+let chooseExport = pickExportFile
+
+function runCaptured(file, args, timeout = 55_000) {
+  return new Promise((resolve) => {
+    execFile(file, args, { windowsHide: true, timeout, maxBuffer: 1 << 20 }, (err, stdout) => {
+      resolve(String(stdout || "").trim())
+    })
+  })
+}
+
+// pickExportPath is the file the person chose, or "" when they cancelled
+// or no dialog could be shown. The path comes back base64 on Windows so a
+// name outside the console code page is not lost.
+async function pickExportPath() {
+  if (process.platform === "win32") {
+    const script = `
+Add-Type -AssemblyName System.Windows.Forms
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.Opacity = 0
+$owner.Show()
+$d = New-Object System.Windows.Forms.OpenFileDialog
+$d.Title = '选择 Kiro 账号导出文件'
+$d.Filter = 'JSON (*.json)|*.json|所有文件 (*.*)|*.*'
+$d.CheckFileExists = $true
+$ok = $d.ShowDialog($owner)
+$owner.Close()
+$owner.Dispose()
+if ($ok -eq [System.Windows.Forms.DialogResult]::OK) {
+  [Console]::Out.WriteLine([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($d.FileName)))
+}
+`
+    // PowerShell 5 writes a pipe as UTF-16. The payload is base64, so dropping
+    // the NULs leaves it intact either way.
+    const line = (await runCaptured("powershell.exe", ["-NoProfile", "-STA", "-Command", script]))
+      .replace(/\0/g, "").replace(/^\uFEFF/, "")
+      .split(/\r?\n/).map((s) => s.trim()).filter((s) => /^[A-Za-z0-9+/=]+$/.test(s)).pop() || ""
+    if (!line) return ""
+    const path = Buffer.from(line, "base64").toString("utf8").replace(/\0/g, "").trim()
+    return path
+  }
+  if (process.platform === "darwin") {
+    return await runCaptured("osascript", [
+      "-e", "try",
+      "-e", 'POSIX path of (choose file with prompt "选择 Kiro 账号导出文件")',
+      "-e", "on error",
+      "-e", '""',
+      "-e", "end try",
+    ])
+  }
+  const zenity = await runCaptured("zenity", ["--file-selection", "--title=选择 Kiro 账号导出文件", "--file-filter=JSON | *.json", "--file-filter=所有文件 | *"])
+  if (zenity) return zenity
+  return await runCaptured("kdialog", ["--getopenfilename", ".", "*.json|JSON"])
+}
+
+async function pickExportFile() {
+  const path = (await pickExportPath()).trim().replace(/^["']|["']$/g, "")
+  if (!path) return ""
+  return await readFile(path, "utf8")
+}
+
+function importSource(inputs = {}) {
+  const pasted = String(inputs.json ?? "").trim()
+  const held = pendingImport
+  pendingImport = ""
+  return pasted || held
+}
+
+function pastePrompt(message) {
+  return {
+    type: "text",
+    key: "json",
+    message,
+    placeholder: '{"accounts":[…]} 或 C:\\path\\account.json',
+  }
+}
+
 async function jsonText(input) {
   const s = String(input ?? "").trim()
-  if (!s) throw new Error("paste the account's JSON, or the path of the file it is in")
+  if (!s) throw new Error("粘贴账号的 JSON，或填写文件路径")
   if (s.startsWith("{") || s.startsWith("[")) return s
   const path = s.replace(/^["']|["']$/g, "")
   try {
     return await readFile(path, "utf8")
   } catch (e) {
-    throw new Error(`couldn't read ${path}: ${e.code ?? e.message}`)
+    throw new Error(`读不了 ${path}：${e.code ?? e.message}`)
   }
 }
 
@@ -2223,15 +2310,15 @@ function jsonSignIn(inputs = {}) {
     callback: async () => {
       let found
       try {
-        found = importedAccounts(await jsonText(inputs.json))
+        found = importedAccounts(await jsonText(importSource(inputs)))
       } catch (e) {
         return { type: "failed", error: e.message }
       }
       const { accounts, skipped } = found
-      if (!accounts.length) return { type: "failed", error: "no account to import" + (skipped.length ? ": " + skipped.join("; ") : "") }
+      if (!accounts.length) return { type: "failed", error: "没有可导入的账号" + (skipped.length ? "：" + skipped.join("; ") : "") }
       const n = Math.trunc(Number(inputs.index || 1))
       if (!(n >= 1 && n <= accounts.length))
-        return { type: "failed", error: `the export holds ${accounts.length} accounts: ${accounts.map((a, i) => `${i + 1}. ${a.user}`).join(", ")}` }
+        return { type: "failed", error: `这份导出有 ${accounts.length} 个账号：${accounts.map((a, i) => `${i + 1}. ${a.user}`).join(", ")}` }
       const { auth, user } = accounts[n - 1]
       let c = { ...auth, refresh: auth.refresh, expires: auth.access ? auth.expires : 1, profile: auth.profileArn ?? "",
         builderID: isBuilderID(auth.loginProvider), own: true }
@@ -2306,33 +2393,57 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
         }
       },
       methods: [
-        { type: "oauth", label: "Kiro (Google, GitHub, AWS Builder ID, IAM Identity Center)", authorize: browserSignIn },
-        { type: "oauth", label: "Kiro CLI's or Kiro IDE's sign-in", authorize: ownSignIn },
-        { type: "api", label: "Kiro API key (ksk_…)" },
+        { type: "oauth", label: "Kiro（Google、GitHub、AWS Builder ID、IAM Identity Center）", authorize: browserSignIn },
+        { type: "oauth", label: "使用 Kiro CLI 或 Kiro IDE 的登录", authorize: ownSignIn },
+        { type: "api", label: "Kiro API Key（ksk_…）" },
         {
           type: "oauth",
-          label: "Import an exported account (JSON)",
-          // the JSON, then — only when the export holds several — which
-          // account, by name (magpie's ask: OpenCode's TUI asks prompts)
+          label: "导入导出的账号（JSON）",
+          // OpenCode's TUI asks prompts (a path or the JSON). magpie calls
+          // ask, and the installed app only draws these select and text
+          // questions, so the words are written here as they should appear.
           prompts: [
             { type: "text", key: "json", message: "The account's JSON (Kiro Account Manager, Cockpit, kiro.rs), or the path of its file",
               placeholder: '{"accounts":[…]} or C:\\path\\account.json' },
           ],
           ask: async (inputs = {}) => {
-            if (!("json" in inputs))
-              // magpie draws this as a file chooser plus a paste box; OpenCode
-              // keeps the text prompt below, which also takes a file path
-              return { type: "file", key: "json", message: "Import an exported Kiro account",
-                placeholder: "Choose a JSON file, or paste the export. Kiro Account Manager, Cockpit, kiro.rs, or the IDE's kiro-auth-token.json." }
+            if (!("how" in inputs) && !("json" in inputs)) {
+              pendingImport = ""
+              return {
+                type: "select", key: "how", message: "导入导出的 Kiro 账号",
+                options: [
+                  { label: "选择文件…", value: "file", hint: "Kiro Account Manager、Cockpit、kiro.rs，或 IDE 的 kiro-auth-token.json" },
+                  { label: "粘贴 JSON", value: "paste" },
+                ],
+              }
+            }
+            if (inputs.how === "paste" && !("json" in inputs)) {
+              pendingImport = ""
+              return pastePrompt("粘贴账号的 JSON，或填写文件路径")
+            }
             if ("index" in inputs) return null
+            let raw = inputs.json
+            if (!raw && inputs.how === "file") {
+              try {
+                raw = await chooseExport()
+              } catch (e) {
+                pendingImport = ""
+                return pastePrompt(`读不了这个文件（${e.code ?? e.message}）。粘贴 JSON，或填写文件路径`)
+              }
+              if (!raw) {
+                pendingImport = ""
+                return pastePrompt("没有选择文件。粘贴 JSON，或填写文件路径")
+              }
+              pendingImport = raw
+            }
             let found
             try {
-              found = importedAccounts(await jsonText(inputs.json))
+              found = importedAccounts(await jsonText(raw))
             } catch {
               return null // said when it signs in
             }
             if (found.accounts.length < 2) return null
-            return { type: "select", key: "index", message: "Which account of the export?",
+            return { type: "select", key: "index", message: "导出里的哪个账号？",
               options: found.accounts.map((a, i) => ({ label: a.user, value: String(i + 1), hint: a.auth.method === "idc" ? "IAM Identity Center" : a.auth.loginProvider || "" })) }
           },
           authorize: async (inputs) => jsonSignIn(inputs),
@@ -2368,6 +2479,7 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
 
 // for tests
 export const _internal = { generate, refresh, usageOf, buildKiro, events, reply, failure, toolID, toolName, toolNames, thinking, configModel, runtimeModel, readCLI, readIDE, regionOf, planName, frames,
-  importedAccounts, expiresOf, machineIdOf, normalizeMachineId, kiroHeaders, chatURL, configure, cfg, withCache, estimateInput, jsonSignIn,
+  importedAccounts, expiresOf, machineIdOf, normalizeMachineId, kiroHeaders, chatURL, configure, cfg, withCache, estimateInput, jsonSignIn, importSource,
+  setExportChooser: (fn) => { chooseExport = fn || pickExportFile },
   thinkingPrefix, effortField, BUDGETS, TextCalls, realClose, refreshUA, SUSPENDED, meter, PRICES, learned, turns, charsOf, windowsOf: () => windows,
   setPing: (ms) => (PING_MS = ms) }

@@ -176,20 +176,47 @@ test("the provider id is kiro-custom, beside the official kiro", async () => {
 
 // ---- the JSON sign-in's questions ---------------------------------------------------
 
-test("the JSON sign-in asks for the JSON, then which account only when there are several", async () => {
-  const { KiroAuthPlugin } = await import("./index.mjs")
+test("the JSON sign-in uses the old magpie buttons, then which account only when there are several", async () => {
+  const { KiroAuthPlugin, _internal } = await import("./index.mjs")
   const hooks = await KiroAuthPlugin({ client: {} }, {})
   const m = hooks.auth.methods.find((x) => /JSON/.test(x.label))
   const q1 = await m.ask({})
-  expect(q1).toMatchObject({ key: "json", type: "file" })
+  expect(q1).toMatchObject({ key: "how", type: "select", message: "导入导出的 Kiro 账号" })
+  expect(q1.options.map((o) => o.label)).toEqual(["选择文件…", "粘贴 JSON"])
+  expect(q1.options.map((o) => o.value)).toEqual(["file", "paste"])
+  const paste = await m.ask({ how: "paste" })
+  expect(paste).toMatchObject({ type: "text", key: "json" })
+  expect(paste.message).toContain("粘贴")
   const one = JSON.stringify({ accounts: [{ email: "a@x", credentials: { refreshToken: "r", authMethod: "social" } }] })
+  expect(await m.ask({ how: "paste", json: one })).toBeNull()
   expect(await m.ask({ json: one })).toBeNull()
   const two = JSON.stringify({ accounts: [{ email: "a@x", credentials: { refreshToken: "r1", authMethod: "social", provider: "Github" } },
     { email: "b@x", credentials: { refreshToken: "r2", authMethod: "social", provider: "Google" } }] })
-  const q2 = await m.ask({ json: two })
+  const q2 = await m.ask({ how: "paste", json: two })
   expect(q2.type).toBe("select")
+  expect(q2.key).toBe("index")
+  expect(q2.message).toBe("导出里的哪个账号？")
   expect(q2.options).toEqual([{ label: "a@x", value: "1", hint: "Github" }, { label: "b@x", value: "2", hint: "Google" }])
-  expect(await m.ask({ json: two, index: "2" })).toBeNull()
+  expect(await m.ask({ how: "paste", json: two, index: "2" })).toBeNull()
   // not JSON: no more questions; the sign-in says why
   expect(await m.ask({ json: "{nope" })).toBeNull()
+  // OpenCode still asks with a text prompt, not the magpie buttons
+  expect(m.prompts[0]).toMatchObject({ type: "text", key: "json" })
+  // a chosen file is kept for the sign-in; the prompt answer is only "file"
+  _internal.setExportChooser(async () => one)
+  try {
+    expect(await m.ask({ how: "file" })).toBeNull()
+    expect(_internal.importSource({ how: "file" })).toBe(one)
+    _internal.setExportChooser(async () => two)
+    const which = await m.ask({ how: "file" })
+    expect(which.key).toBe("index")
+    expect(await m.ask({ how: "file", index: "1" })).toBeNull()
+    expect(_internal.importSource({ how: "file", index: "1" })).toBe(two)
+    _internal.setExportChooser(async () => "")
+    const missed = await m.ask({ how: "file" })
+    expect(missed).toMatchObject({ type: "text", key: "json" })
+    expect(missed.message).toContain("没有选择文件")
+  } finally {
+    _internal.setExportChooser(null)
+  }
 })
