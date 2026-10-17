@@ -1,0 +1,12 @@
+{
+  "name": "@magpie-community/opencode-kiro-auth",
+  "version": "0.1.12-custom.5",
+  "description": "Kiro subscriptions (Free, Pro, Pro+, Power) in OpenCode and magpie",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": "./index.mjs",
+  "files": ["index.mjs", "README.md"],
+  "keywords": ["opencode", "opencode-plugin", "magpie", "kiro"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/Professor-Chen/magpie-kiro-plugin.git" }
+}
