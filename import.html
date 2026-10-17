@@ -7,8 +7,8 @@
 <title>导入 Kiro 账号</title>
 <!--
   The kiro-custom plugin's file chooser, for magpie in a window or on the
-  web. The file is read here, in the browser; nothing is sent anywhere but
-  the plugin's own address on 127.0.0.1 that the sign-in gave (redirect_uri).
+  web. The files are read here, in the browser; nothing is sent anywhere
+  but the plugin's own address that the sign-in gave (redirect_uri).
 -->
 <style>
 :root{--bg:#fafafa;--fg:#222;--muted:#666;--card:#fff;--line:#ddd;--accent:#2563eb;--bad:#c0392b;--ok:#2a9d5c}
@@ -16,7 +16,7 @@
 :root[data-theme="dark"]{--bg:#161616;--fg:#eee;--muted:#aaa;--card:#202020;--line:#3a3a3a;--accent:#60a5fa;--bad:#ef6b5b;--ok:#4cc38a}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
-main{max-width:34rem;margin:0 auto;padding:2rem 16px}
+main{max-width:36rem;margin:0 auto;padding:2rem 16px}
 h1{font-size:1.3rem;margin:0 0 .5rem}
 p{margin:.4rem 0}
 .muted{color:var(--muted);font-size:.9rem}
@@ -24,44 +24,54 @@ p{margin:.4rem 0}
 .drop.over{border-color:var(--accent)}
 .drop input{display:block;margin:.6rem auto 0;max-width:100%}
 fieldset{border:1px solid var(--line);border-radius:10px;background:var(--card);margin:1rem 0;padding:.6rem 1rem}
-label.acct{display:block;padding:.3rem 0;cursor:pointer}
+legend{padding:0 .3rem}
+label.acct{display:flex;gap:.5rem;align-items:baseline;padding:.25rem 0;cursor:pointer;overflow-wrap:anywhere}
+label.acct .from{color:var(--muted);font-size:.85rem}
+.tools{display:flex;gap:1rem;font-size:.9rem;margin:.2rem 0 .4rem}
+.tools button{padding:0;border:0;background:none;color:var(--accent);cursor:pointer}
 .err{color:var(--bad)}
 .ok{color:var(--ok)}
 .row{display:flex;gap:.5rem;margin:.6rem 0}
 .row input{flex:1;min-width:0;padding:.45rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);font:13px ui-monospace,monospace}
-button{padding:.45rem 1rem;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+button.main,button.ghost{padding:.45rem 1rem;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
 button.ghost{background:transparent;color:var(--accent)}
+button:disabled{opacity:.5;cursor:default}
 button:focus-visible,input:focus-visible,.drop:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+code{overflow-wrap:anywhere}
 [hidden]{display:none!important}
 </style>
 </head>
 <body>
 <main>
   <h1>导入导出的 Kiro 账号</h1>
-  <p class="muted">支持 Kiro Account Manager、Cockpit、kiro.rs 的 credentials.json，以及 Kiro IDE 的 kiro-auth-token.json。文件只在这个浏览器里读取，只会交给 magpie 里的 Kiro 插件。</p>
+  <p class="muted">支持 Kiro Account Manager、Cockpit、kiro.rs 的 credentials.json，以及 Kiro IDE 的 kiro-auth-token.json，可以一次选多个文件。文件只在这个浏览器里读取，只会交给 magpie 里的 Kiro 插件。</p>
 
   <p id="bad" class="err" role="alert" hidden></p>
 
   <div id="pick">
     <label class="drop" id="drop">
-      <span>点这里选择 JSON 文件，或把文件拖进来</span>
-      <input id="file" type="file" accept=".json,application/json">
+      <span>点这里选择 JSON 文件（可多选），或把文件拖进来</span>
+      <input id="file" type="file" accept=".json,application/json" multiple>
     </label>
   </div>
 
   <fieldset id="which" hidden>
-    <legend>导出里有多个账号，选一个</legend>
+    <legend>要导入的账号</legend>
+    <div class="tools"><button id="all" type="button">全选</button><button id="none" type="button">全不选</button></div>
     <div id="accts"></div>
   </fieldset>
 
   <div id="go" hidden>
-    <p class="ok" id="ready"></p>
+    <p class="ok" id="ready" aria-live="polite"></p>
+    <p class="muted" id="dest"></p>
     <p class="err" id="far" hidden>这个浏览器连不上 magpie 所在电脑上的插件（magpie 在另一台电脑、服务器或 Docker 上，或者这次导入已经结束）。请复制下面的地址，粘贴到 magpie 登录框下面的地址框里，再点「Finish sign-in」。如果 magpie 里的导入已经关掉或超时，请重新开始导入。</p>
-    <div class="row"><button id="open" type="button">完成导入</button></div>
-    <p class="muted" id="hint">如果跳转后的页面打不开，把下面的地址复制下来，粘贴到 magpie 登录框下面的地址框里，再点「Finish sign-in」。</p>
-    <div class="row">
-      <input id="link" readonly aria-label="导入地址">
-      <button id="copy" type="button" class="ghost">复制</button>
+    <div class="row"><button id="open" class="main" type="button">完成导入</button></div>
+    <div id="paste">
+      <p class="muted" id="hint">如果跳转后的页面打不开，把下面的地址复制下来，粘贴到 magpie 登录框下面的地址框里，再点「Finish sign-in」。</p>
+      <div class="row">
+        <input id="link" readonly aria-label="导入地址">
+        <button id="copy" type="button" class="ghost">复制</button>
+      </div>
     </div>
   </div>
 </main>
@@ -70,20 +80,25 @@ button:focus-visible,input:focus-visible,.drop:focus-within{outline:2px solid va
   const $ = (id) => document.getElementById(id)
   const q = new URLSearchParams(location.search)
   const state = q.get("state") || ""
+  // direct: the plugin's port is published (magpie in Docker), and the
+  // browser goes to it straight; else it is on 127.0.0.1 alone
+  const direct = q.get("direct") === "1"
   let back
   try { back = new URL(q.get("redirect_uri") || "") } catch {}
-  // only the plugin's own port on this computer: a link pointing anywhere
-  // else would hand someone the account
-  const local = back && back.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(back.hostname)
+  const loopback = back && ["127.0.0.1", "localhost", "[::1]"].includes(back.hostname)
+  const good = back && back.protocol === "http:" && back.pathname === "/import" && (loopback || direct)
   const fail = (msg) => { $("bad").textContent = msg; $("bad").hidden = false }
-  if (!local || !/^[A-Za-z0-9_-]{16,}$/.test(state)) {
+  if (!good || !/^[A-Za-z0-9_-]{16,}$/.test(state)) {
     fail("这个页面要从 magpie 的「导入导出的账号（JSON）→ 选择文件…」打开。")
     $("pick").hidden = true
     return
   }
+  if (!loopback) $("dest").textContent = "账号会直接发到 magpie 的导入端口：" + back.host + "。不是你自己的 magpie 就别继续。"
+  // magpie takes a pasted address of 16 KB at most; a browser's own is
+  // far longer, and the plugin reads up to 1 MB
+  const LIMIT = direct ? 900000 : 15000
 
-  let data = null
-  let list = []
+  let items = [] // {acct, from}
 
   const b64url = (bytes) => {
     let s = ""
@@ -99,65 +114,108 @@ button:focus-visible,input:focus-visible,.drop:focus-within{outline:2px solid va
     return "j" + b64url(raw)
   }
 
-  // the one account to import, in the export's own shape
-  function chosen(i) {
-    if (Array.isArray(data)) return [data[i]]
-    if (Array.isArray(data && data.accounts)) return { ...data, accounts: [data.accounts[i]] }
-    return data
+  // an account as the plugin reads it, without what it never keeps (an
+  // export's passwords and notes): shorter, and nothing else leaves
+  function slim(a) {
+    if (!a || typeof a !== "object") return a
+    const c = a.credentials || a.auth
+    if (!c || typeof c !== "object") return a
+    const out = {}
+    for (const k of ["email", "nickname", "id", "status", "disabled", "machineId", "profileArn", "idp"]) if (k in a) out[k] = a[k]
+    out[a.credentials ? "credentials" : "auth"] = c
+    return out
   }
+  const accountsIn = (data) => (Array.isArray(data) ? data : Array.isArray(data && data.accounts) ? data.accounts : data && typeof data === "object" ? [data] : [])
+  const nameOf = (a, i) => {
+    const c = (a && (a.credentials || a.auth)) || a || {}
+    return (a && (a.email || a.nickname)) || c.email || (a && a.id) || "账号 " + (i + 1)
+  }
+  const statusOf = (a) => (a && a.disabled === true ? "disabled" : String((a && a.status) || "active").toLowerCase())
+  const usable = (a) => ["active", "normal", "ok", ""].includes(statusOf(a))
 
-  async function ready(i) {
+  const picked = () => [...document.querySelectorAll("#accts input:checked")].map((r) => items[Number(r.value)].acct)
+
+  async function ready() {
+    const list = picked()
+    $("bad").hidden = true
+    $("far").hidden = true
+    if (!list.length) {
+      $("go").hidden = true
+      return
+    }
     const url = new URL(back.href)
     url.searchParams.set("state", state)
-    url.searchParams.set("d", await pack(JSON.stringify(chosen(i))))
-    // magpie takes a pasted address of 16 KB at most
-    if (url.href.length > 15000) return fail("这个账号的数据太大，放不进地址里。请改用「粘贴 JSON」。")
+    url.searchParams.set("d", await pack(JSON.stringify(list.map(slim))))
+    if (url.href.length > LIMIT) {
+      $("go").hidden = true
+      return fail(`选了 ${list.length} 个账号，数据太大，放不进一个地址。请少选一些，分几次导入。`)
+    }
     $("link").value = url.href
-    const a = list[i] || {}
-    $("ready").textContent = "已读取：" + (a.email || a.nickname || (a.credentials || a.auth || a).email || "账号") + "。点「完成导入」。"
+    $("ready").textContent = `已选 ${list.length} 个账号。点「完成导入」。`
+    $("paste").hidden = direct
+    $("open").textContent = "完成导入"
+    $("open").onclick = finish
     $("go").hidden = false
   }
 
-  async function read(file) {
+  async function read(files) {
     $("bad").hidden = true
     $("go").hidden = true
-    $("which").hidden = true
-    try {
-      data = JSON.parse(await file.text())
-    } catch (e) {
-      return fail("这不是 JSON 文件：" + e.message)
+    const bad = []
+    for (const f of files) {
+      let data
+      try {
+        data = JSON.parse(await f.text())
+      } catch (e) {
+        bad.push(f.name + "：不是 JSON")
+        continue
+      }
+      const list = accountsIn(data)
+      if (!list.length) bad.push(f.name + "：没有账号")
+      list.forEach((acct) => items.push({ acct, from: f.name }))
     }
-    list = Array.isArray(data) ? data : Array.isArray(data && data.accounts) ? data.accounts : data && typeof data === "object" ? [data] : []
-    if (!list.length) return fail("文件里没有账号。")
-    if (list.length === 1) return ready(0)
+    draw()
+    if (bad.length) fail(bad.join("；"))
+  }
+
+  function draw() {
     const box = $("accts")
     box.textContent = ""
-    list.forEach((a, i) => {
+    items.forEach((it, i) => {
       const l = document.createElement("label")
       l.className = "acct"
       const r = document.createElement("input")
-      r.type = "radio"
-      r.name = "acct"
+      r.type = "checkbox"
       r.value = String(i)
-      r.onchange = () => ready(i)
-      const c = (a && (a.credentials || a.auth)) || a || {}
-      const st = String((a && a.status) || "active").toLowerCase()
-      l.append(r, " " + ((a && (a.email || a.nickname)) || c.email || "账号 " + (i + 1)) +
-        (c.provider ? "（" + c.provider + "）" : "") + (["active", "normal", "ok", ""].includes(st) ? "" : " · " + st))
+      r.checked = usable(it.acct)
+      r.onchange = ready
+      const c = (it.acct && (it.acct.credentials || it.acct.auth)) || it.acct || {}
+      const text = document.createElement("span")
+      text.textContent = nameOf(it.acct, i) + (c.provider ? "（" + c.provider + "）" : "") + (usable(it.acct) ? "" : " · " + statusOf(it.acct))
+      const from = document.createElement("span")
+      from.className = "from"
+      from.textContent = it.from
+      l.append(r, text, from)
       box.append(l)
     })
-    $("which").hidden = false
+    $("which").hidden = !items.length
+    ready()
   }
 
-  $("file").onchange = (e) => e.target.files[0] && read(e.target.files[0])
+  const take = (files) => files && files.length && read([...files])
+  $("file").onchange = (e) => { take(e.target.files); e.target.value = "" }
   const drop = $("drop")
   drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over") }
   drop.ondragleave = () => drop.classList.remove("over")
   drop.ondrop = (e) => {
     e.preventDefault()
     drop.classList.remove("over")
-    if (e.dataTransfer.files[0]) read(e.dataTransfer.files[0])
+    take(e.dataTransfer.files)
   }
+  const tick = (on) => { document.querySelectorAll("#accts input").forEach((r) => (r.checked = on)); ready() }
+  $("all").onclick = () => tick(true)
+  $("none").onclick = () => tick(false)
+
   // the plugin's port answers /ping when this browser is on magpie's
   // computer and the import is still waiting; otherwise the address goes
   // to magpie by hand rather than to a page that won't load
@@ -169,7 +227,8 @@ button:focus-visible,input:focus-visible,.drop:focus-within{outline:2px solid va
       return false
     }
   }
-  $("open").onclick = async () => {
+  async function finish() {
+    if (direct) return location.assign($("link").value)
     $("open").disabled = true
     const ok = await near()
     $("open").disabled = false

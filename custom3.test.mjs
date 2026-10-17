@@ -238,7 +238,7 @@ test("选择文件… opens the import page, and the address it sends back signs
   // no refresh token: it reaches the sign-in, which says why, with no network
   const text = JSON.stringify({ accounts: [{ email: "a@x", credentials: { authMethod: "social" } }] })
   const d = "g" + gzipSync(Buffer.from(text)).toString("base64url")
-  expect(await at({ state, d })).toContain("已交给 magpie")
+  expect(await at({ state, d })).toContain("没有导入账号")
   const r = await done
   expect(r.type).toBe("failed")
   expect(r.error).toContain("no refresh token")
@@ -247,4 +247,64 @@ test("选择文件… opens the import page, and the address it sends back signs
 
   expect(_internal.importPacked("j" + Buffer.from(text).toString("base64url"))).toBe(text)
   expect(() => _internal.importPacked("x")).toThrow()
+})
+
+test("the import page's accounts are all kept: the first as the sign-in, the others beside it", async () => {
+  const { _internal } = await import("./index.mjs")
+  const set = []
+  const client = { auth: { set: async (o) => set.push(o) } }
+  // fresh tokens: no refresh, and whoIs fails quietly with no network
+  const later = Date.now() + 3600_000
+  const acct = (email) => ({ email, credentials: { accessToken: "a-" + email, refreshToken: "r-" + email, expiresAt: later, authMethod: "social", provider: "Github" } })
+  const text = JSON.stringify([acct("a@x"), acct("b@x"), { email: "c@x", credentials: { authMethod: "social" } }, acct("d@x")])
+  const r = await _internal.importAll(client, text)
+  expect(r.type).toBe("success")
+  expect(r.accountId).toBe("a@x")
+  expect(r.count).toBe(3)
+  expect(r.notes.join()).toContain("c@x")
+  expect(set.map((o) => o.body.accountId)).toEqual(["b@x", "d@x"])
+  for (const o of set) {
+    expect(o.path.id).toMatch(/^kiro-custom#[0-9a-f]{8}$/)
+    expect(o.body).toMatchObject({ type: "oauth", method: "social", loginProvider: "Github" })
+    expect(o.body.refresh).toBe("r-" + o.body.accountId)
+  }
+  // the same account always goes to the same key, so importing it again replaces it
+  const again = []
+  await _internal.importAll({ auth: { set: async (o) => again.push(o) } }, text)
+  expect(again.map((o) => o.path.id)).toEqual(set.map((o) => o.path.id))
+  expect((await _internal.importAll(client, JSON.stringify([{ email: "c@x", credentials: {} }]))).type).toBe("failed")
+})
+
+test("in Docker the import port is published, and the page sends the browser there", async () => {
+  const { KiroAuthPlugin, _internal } = await import("./index.mjs")
+  const was = process.env.MAGPIE_PUBLIC_URL
+  try {
+    _internal.configure({ importListen: "4567" })
+    process.env.MAGPIE_PUBLIC_URL = "https://gw.example.test/"
+    expect(_internal.importWhere()).toMatchObject({ host: "0.0.0.0", port: 4567 })
+    expect(_internal.importWhere().back()).toBe("http://gw.example.test:4567/import")
+    _internal.configure({ importListen: "127.0.0.1:4567", importCallback: "http://nas.lan:14567/" })
+    expect(_internal.importWhere()).toMatchObject({ host: "127.0.0.1", port: 4567 })
+    expect(_internal.importWhere().back()).toBe("http://nas.lan:14567/import")
+    _internal.configure({})
+    expect(_internal.importWhere()).toMatchObject({ host: "127.0.0.1", port: 0 })
+
+    // a real port: the link says direct
+    delete process.env.MAGPIE_PUBLIC_URL
+    const hooks = await KiroAuthPlugin({ client: {} }, { importPage: "https://example.test/import.html", importListen: "127.0.0.1:0" })
+    expect(_internal.importWhere().port).toBe(0)
+    const m = hooks.auth.methods.find((x) => /JSON/.test(x.label))
+    const a = await m.authorize({ how: "file" })
+    const page = new URL(a.url)
+    expect(page.searchParams.get("direct")).toBe("1")
+    const back = new URL(page.searchParams.get("redirect_uri"))
+    const done = a.callback()
+    const r = await fetch(back.href + "?" + new URLSearchParams({ state: page.searchParams.get("state"), d: "j" + Buffer.from("[]").toString("base64url") }))
+    expect(await r.text()).toContain("没有导入账号")
+    expect((await done).type).toBe("failed")
+  } finally {
+    if (was === undefined) delete process.env.MAGPIE_PUBLIC_URL
+    else process.env.MAGPIE_PUBLIC_URL = was
+    _internal.configure({})
+  }
 })

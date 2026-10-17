@@ -129,14 +129,42 @@ the file holding it. In magpie, 选择文件… opens the import page and
 The import page ([`import.html`](import.html), served by GitHub Pages at
 `https://professor-chen.github.io/magpie-kiro-plugin/import.html`; the
 `importPage` option or `KIRO_IMPORT_PAGE` names another copy) reads the
-file in the browser, asks which account when it holds several, and sends
-the browser back to a port the plugin opened on `127.0.0.1` for this
-import, the account gzip'd in the address. Nothing goes anywhere else.
-On the web, from another computer or with magpie in Docker, that page
-won't load: copy its whole address (or the page's own copy of it) into
+files in the browser, several at once, and lists their accounts to tick
+(the active ones are ticked). It sends the browser back to a port the
+plugin opened for this import, the ticked accounts gzip'd in the address,
+and nothing goes anywhere else. Each account is checked with a refresh;
+the first is this sign-in's, and each other is kept as an account of its
+own (`kiro-custom#…`, by its name, so importing it again replaces it).
+The page says which were skipped or failed, and why.
+
+That port is on `127.0.0.1`. From another computer, or with magpie in
+Docker, the browser can't reach it: copy the address the page shows into
 the address box magpie shows under the sign-in, and magpie opens it on
-its own computer, as for Kiro's browser sign-in. The port waits as long
-as magpie's sign-in does, ten minutes.
+its own computer, as for Kiro's browser sign-in. Such an address holds
+about a dozen accounts at most (magpie takes 16 KB).
+
+In Docker the port can be published instead, and the browser goes there
+straight, with no address to paste and no such limit. Set `importListen`
+(`KIRO_IMPORT_LISTEN`) to the port, `host:port` to listen on one address
+(the whole container's by default), publish it, and give the address the
+browser reaches it at with `importCallback` (`KIRO_IMPORT_CALLBACK`, as
+`http://host:port`), else `MAGPIE_PUBLIC_URL`'s host and the same port:
+
+```yaml
+services:
+  magpie:
+    environment:
+      KIRO_IMPORT_LISTEN: "3427"
+      KIRO_IMPORT_CALLBACK: http://nas.lan:3427
+    ports:
+      - "3427:3427"
+```
+
+One import at a time then, as it has one port. The port is open only
+while an import waits (ten minutes at most), and only an address with
+this import's random `state` is taken, but it is plain HTTP: publish it
+on your own network, not to the internet. The page says where it sends
+the accounts when that isn't this computer.
 
 Accepted exports:
 
@@ -178,6 +206,8 @@ Set as the plugin's options in magpie's `plugins.json`
 | `toolDescriptionLimit` | `KIRO_TOOL_DESCRIPTION_LIMIT` | `9216` | A tool's description is cut at this. |
 | `meter` | `KIRO_METER` | `on` | `on`: the usage's cache tokens, and a native thinker's unshown reasoning, are read from what Kiro metered (below); `off`: `cacheRatio` stands in. |
 | `importPage` | `KIRO_IMPORT_PAGE` | GitHub Pages | The import page 选择文件… opens: a copy of `import.html` served elsewhere (http or https). |
+| `importListen` | `KIRO_IMPORT_LISTEN` | (none) | Docker: the import page's port, `port` or `host:port`, published so the browser goes to it straight. |
+| `importCallback` | `KIRO_IMPORT_CALLBACK` | `MAGPIE_PUBLIC_URL`'s host | Where the browser reaches `importListen`'s port, as `http://host:port`. |
 
 ### Usage, read from what Kiro metered (this fork)
 

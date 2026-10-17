@@ -44,7 +44,7 @@ const CALLBACK_PORTS = [3128, 4649, 6588, 8008, 9091, 49153, 50153, 51153, 52153
 // import.html, where 选择文件… chooses an export (pageSignIn); importPage
 // (KIRO_IMPORT_PAGE) puts a copy of it elsewhere
 const IMPORT_PAGE = "https://professor-chen.github.io/magpie-kiro-plugin/import.html"
-const IMPORT_MAX = 256 << 10 // the account's text, unpacked
+const IMPORT_MAX = 4 << 20 // the accounts' text, unpacked
 // what the IDE asks AWS for
 const SCOPES = ["codewhisperer:completions", "codewhisperer:analysis", "codewhisperer:conversations",
   "codewhisperer:transformations", "codewhisperer:taskassist"]
@@ -95,7 +95,7 @@ const SIGN_IN_TIMEOUT = 10 * 60 * 1000
 //     "off" leaves them to cacheRatio
 const DEFAULTS = { cacheRatio: 0, fingerprint: "ide", kiroVersion: "0.9.2", nodeVersion: "22.21.1", systemVersion: "",
   endpoint: "kiro", retries: 2, thinkingMin: 1024, thinkingMax: 64000, budgets: "", adaptive: false, effortField: "auto",
-  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", importPage: "" }
+  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", importPage: "", importListen: "", importCallback: "" }
 const cfg = { ...DEFAULTS }
 // BUDGETS are each effort's thinking budget (xhigh its own level: #120)
 const BASE_BUDGETS = { low: 10000, medium: 20000, high: 30000, xhigh: 50000, max: 64000 }
@@ -122,6 +122,11 @@ function configure(o = {}) {
   cfg.meter = String(pick("meter", "KIRO_METER")).toLowerCase() === "off" ? "off" : "on"
   const ip = String(pick("importPage", "KIRO_IMPORT_PAGE"))
   cfg.importPage = /^https?:\/\//i.test(ip) ? ip : IMPORT_PAGE
+  // magpie in Docker: the import port is published (host:port it listens
+  // on), and the browser is sent to it straight (importCallback, else
+  // MAGPIE_PUBLIC_URL's host and that port)
+  cfg.importListen = String(pick("importListen", "KIRO_IMPORT_LISTEN")).trim()
+  cfg.importCallback = String(pick("importCallback", "KIRO_IMPORT_CALLBACK")).trim().replace(/\/+$/, "")
   Object.assign(BUDGETS, BASE_BUDGETS)
   const b = pick("budgets", "KIRO_BUDGETS")
   const pairs = b && typeof b === "object" ? Object.entries(b) : String(b ?? "").split(",").map((s) => s.split("="))
@@ -2214,13 +2219,14 @@ async function ownSignIn() {
 // The installed magpie only draws a select (buttons) or a text box, and
 // on the web the plugin runs on another computer than the browser, so a
 // file can only be chosen in a page of the browser's own. 选择文件… opens
-// import.html (importPage): it reads the file there and sends the browser
-// back to a port of the plugin's on 127.0.0.1 (redirect_uri), the account
-// in the address. A browser on another computer can't reach that port,
-// but magpie takes the address pasted under the sign-in and opens it on
-// the plugin's computer (its pasted-callback for a plugin, by the port
-// redirect_uri names), so the same page works in the window, on the web
-// and in Docker.
+// import.html (importPage): it reads the files there, one or several, and
+// sends the browser back to a port of the plugin's (redirect_uri), the
+// accounts ticked in the address. That port is on 127.0.0.1, which a
+// browser on another computer can't reach; magpie then takes the address
+// pasted under the sign-in and opens it on its own computer (a plugin's
+// pasted callback, by the port redirect_uri names). In Docker the port can
+// be published instead (importListen, importCallback), and the browser
+// goes to it straight.
 
 // importPacked is the account the page put in its address: "g" and gzip,
 // or "j" and the text, base64url either way
@@ -2232,24 +2238,48 @@ function importPacked(d) {
   throw new Error("the address holds no account")
 }
 
+// importWhere is where the import port listens, and the address the
+// browser is sent back to
+function importWhere() {
+  const m = /^(?:(\[[^\]]+\]|[^:]+):)?(\d{1,5})$/.exec(cfg.importListen)
+  if (!m) return { host: "127.0.0.1", port: 0, back: (port) => `http://127.0.0.1:${port}/import` }
+  const host = (m[1] || "0.0.0.0").replace(/^\[|\]$/g, "")
+  const port = Number(m[2])
+  const back = (at = port) => {
+    if (cfg.importCallback) return cfg.importCallback + "/import"
+    try {
+      return `http://${new URL(process.env.MAGPIE_PUBLIC_URL || "").hostname}:${at}/import`
+    } catch {
+      return `http://127.0.0.1:${at}/import`
+    }
+  }
+  return { host, port, back }
+}
+
 // pageSignIn waits on its own port for the address import.html sends the
-// browser to, and signs in with the account it carries.
-async function pageSignIn() {
-  const server = createServer()
+// browser to. The first account that signs in is this sign-in's; the
+// others ticked are kept beside it as accounts of their own (client.auth.set
+// under kiro-custom#…, by their name, so importing one again replaces it).
+async function pageSignIn(client) {
+  const where = importWhere()
+  const server = createServer({ maxHeaderSize: 1 << 20 })
   await new Promise((resolve, reject) => {
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", resolve)
+    server.once("error", (e) => reject(e.code === "EADDRINUSE" ? new Error(`导入端口 ${where.port} 被占用：另一次导入还开着，关掉它再试`) : e))
+    server.listen(where.port, where.host, resolve)
   })
-  const port = server.address().port
   const state = randomBytes(24).toString("base64url")
   const link = new URL(cfg.importPage)
-  link.searchParams.set("redirect_uri", `http://127.0.0.1:${port}/import`)
+  link.searchParams.set("redirect_uri", where.back(server.address().port))
   link.searchParams.set("state", state)
+  // a published port: the page sends the browser there without asking
+  // (an https page can't fetch an http address that isn't this computer's)
+  if (cfg.importListen) link.searchParams.set("direct", "1")
   let settle
   const got = new Promise((r) => (settle = r))
+  let busy = false
   // magpie gives a sign-in ten minutes; the port goes with it
-  const timer = setTimeout(() => settle({ error: "没有收到账号，导入已超时；重新开始导入" }), 11 * 60_000)
-  server.on("request", (req, res) => {
+  const timer = setTimeout(() => settle({ type: "failed", error: "没有收到账号，导入已超时；重新开始导入" }), 11 * 60_000)
+  server.on("request", async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1")
     const html = (ok, title, text) => {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" })
@@ -2264,6 +2294,7 @@ async function pageSignIn() {
     }
     if (url.pathname !== "/import") return res.writeHead(404).end()
     if (url.searchParams.get("state") !== state) return html(false, "这个地址不是这次导入的", "在 magpie 里重新开始导入。")
+    if (busy) return html(false, "正在导入", "这个地址已经收到了，回到 magpie 看结果。")
     let text
     try {
       text = importPacked(url.searchParams.get("d"))
@@ -2271,21 +2302,54 @@ async function pageSignIn() {
     } catch (e) {
       return html(false, "地址里没有完整的账号", "重新在导入页里选择文件，并复制完整的地址。")
     }
-    html(true, "账号已交给 magpie", "可以关掉这个页面，回到 magpie。")
-    settle({ text })
+    busy = true
+    const r = await importAll(client, text)
+    if (r.type === "success") html(true, `导入了 ${r.count} 个账号`, (r.notes.length ? r.notes.join("；") + "。" : "") + "可以关掉这个页面，回到 magpie。")
+    else html(false, "没有导入账号", r.error)
+    settle(r)
   })
   return {
     url: link.href,
-    instructions: "magpie 打开了导入页：在页面里选择导出的 JSON 文件，再点「完成导入」。如果之后的页面打不开（magpie 在服务器或 Docker 上），把它的完整地址粘贴到下面。",
+    instructions: "magpie 打开了导入页：在页面里选择导出的 JSON 文件（可以多选），勾选账号，再点「完成导入」。如果之后的页面打不开（magpie 在服务器或 Docker 上），把它的完整地址粘贴到下面。",
     method: "auto",
     callback: async () => {
       const r = await got
       clearTimeout(timer)
       server.close()
-      if (r.error) return { type: "failed", error: r.error }
-      return importSignIn(r.text, 1)
+      if (r.type !== "success") return r
+      const { count: _c, notes: _n, ...result } = r
+      return result
     },
   }
+}
+
+// importAll signs in each account of an export, four at a time: the first
+// that signs in is the result, the others are kept with client.auth.set.
+async function importAll(client, text) {
+  let found
+  try {
+    found = importedAccounts(text)
+  } catch (e) {
+    return { type: "failed", error: e.message }
+  }
+  const { accounts, skipped } = found
+  if (!accounts.length) return { type: "failed", error: "没有可导入的账号" + (skipped.length ? "：" + skipped.join("; ") : "") }
+  const out = new Array(accounts.length)
+  let next = 0
+  await Promise.all(Array.from({ length: Math.min(4, accounts.length) }, async () => {
+    while (next < accounts.length) {
+      const i = next++
+      out[i] = await accountSignIn(accounts[i])
+    }
+  }))
+  const ok = out.filter((r) => r.type === "success")
+  const notes = [...skipped.map((x) => "跳过 " + x), ...out.filter((r) => r.type !== "success").map((r) => "失败 " + r.error)]
+  if (!ok.length) return { type: "failed", error: notes.join("; ") }
+  for (const r of ok.slice(1)) {
+    const { type: _t, provider: _p, ...body } = r
+    await client?.auth?.set?.({ path: { id: ID + "#" + createHash("sha256").update(r.accountId).digest("hex").slice(0, 8) }, body: { type: "oauth", ...body } })
+  }
+  return { ...ok[0], count: ok.length, notes }
 }
 
 function importSource(inputs = {}) {
@@ -2343,7 +2407,12 @@ async function importSignIn(text, n) {
   n = Math.trunc(Number(n))
   if (!(n >= 1 && n <= accounts.length))
     return { type: "failed", error: `这份导出有 ${accounts.length} 个账号：${accounts.map((a, i) => `${i + 1}. ${a.user}`).join(", ")}` }
-  const { auth, user } = accounts[n - 1]
+  return accountSignIn(accounts[n - 1])
+}
+
+// accountSignIn checks an imported account with a refresh, and gives the
+// sign-in to keep
+async function accountSignIn({ auth, user }) {
   let c = { ...auth, refresh: auth.refresh, expires: auth.access ? auth.expires : 1, profile: auth.profileArn ?? "",
     builderID: isBuilderID(auth.loginProvider), own: true }
   try {
@@ -2451,7 +2520,7 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
             return { type: "select", key: "index", message: "导出里的哪个账号？",
               options: found.accounts.map((a, i) => ({ label: a.user, value: String(i + 1), hint: a.auth.method === "idc" ? "IAM Identity Center" : a.auth.loginProvider || "" })) }
           },
-          authorize: async (inputs = {}) => (inputs.how === "file" ? pageSignIn() : jsonSignIn(inputs)),
+          authorize: async (inputs = {}) => (inputs.how === "file" ? pageSignIn(client) : jsonSignIn(inputs)),
         },
       ],
     },
@@ -2484,6 +2553,6 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
 
 // for tests
 export const _internal = { generate, refresh, usageOf, buildKiro, events, reply, failure, toolID, toolName, toolNames, thinking, configModel, runtimeModel, readCLI, readIDE, regionOf, planName, frames,
-  importedAccounts, expiresOf, machineIdOf, normalizeMachineId, kiroHeaders, chatURL, configure, cfg, withCache, estimateInput, jsonSignIn, importSource, importPacked, pageSignIn,
+  importedAccounts, expiresOf, machineIdOf, normalizeMachineId, kiroHeaders, chatURL, configure, cfg, withCache, estimateInput, jsonSignIn, importSource, importPacked, pageSignIn, importAll, importWhere,
   thinkingPrefix, effortField, BUDGETS, TextCalls, realClose, refreshUA, SUSPENDED, meter, PRICES, learned, turns, charsOf, windowsOf: () => windows,
   setPing: (ms) => (PING_MS = ms) }
