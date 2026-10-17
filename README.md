@@ -1,8 +1,15 @@
-# @magpie-community/opencode-kiro-auth
+# opencode-kiro-custom
 
 Signs in to a [Kiro](https://kiro.dev) subscription (Free, Pro, Pro+,
 Power) and makes its requests, in OpenCode and in magpie. Provider id:
-`kiro`.
+`kiro-custom`.
+
+This is an unofficial plugin. It sits beside magpie's built-in Kiro and
+the community plugin `@magpie-community/opencode-kiro-auth` (provider id
+`kiro`): a different package, a different provider, its own sign-in. It
+does not replace either of them. In magpie it belongs on the unofficial
+GitHub list, which needs the repository tagged `magpie-plugin` and
+published as its own repository, not as a fork.
 
 ## Signing in
 

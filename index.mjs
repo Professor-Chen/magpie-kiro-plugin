@@ -24,7 +24,11 @@ import { readFile, rename, writeFile } from "node:fs/promises"
 import { homedir, hostname, release } from "node:os"
 import { delimiter, join } from "node:path"
 
-const ID = "kiro"
+// kiro-custom, not kiro: magpie's built-in Kiro and the community plugin
+// @magpie-community/opencode-kiro-auth both sign in as kiro. This plugin
+// is a separate provider, so installing it neither replaces them nor
+// shares their sign-in.
+const ID = "kiro-custom"
 const MESSAGES = "@ai-sdk/anthropic"
 const BASE = "https://runtime.us-east-1.kiro.dev" // what OpenCode is given; the fetch sends each request to the account's region
 
@@ -2337,7 +2341,7 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
       config.provider ??= {}
       const was = config.provider[ID] ?? {}
       config.provider[ID] = {
-        name: "Kiro",
+        name: "Kiro Custom",
         npm: MESSAGES,
         api: BASE,
         ...was,

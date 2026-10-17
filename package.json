@@ -1,7 +1,7 @@
 {
-  "name": "@magpie-community/opencode-kiro-auth",
-  "version": "0.1.12-custom.5",
-  "description": "Kiro subscriptions (Free, Pro, Pro+, Power) in OpenCode and magpie",
+  "name": "opencode-kiro-custom",
+  "version": "0.1.12-custom.6",
+  "description": "Unofficial Kiro subscriptions (Free, Pro, Pro+, Power) for OpenCode and magpie. Provider id kiro-custom, beside the official Kiro plugin.",
   "type": "module",
   "main": "./index.mjs",
   "exports": "./index.mjs",

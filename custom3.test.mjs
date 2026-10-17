@@ -163,6 +163,17 @@ test("a reply that called a tool, or thought, isn't learned from", async () => {
 })
 
 
+test("the provider id is kiro-custom, beside the official kiro", async () => {
+  const { KiroAuthPlugin } = await import("./index.mjs")
+  const hooks = await KiroAuthPlugin({ client: {} }, {})
+  expect(hooks.auth.provider).toBe("kiro-custom")
+  expect(hooks.provider.id).toBe("kiro-custom")
+  const config = { provider: {} }
+  await hooks.config(config)
+  expect(config.provider["kiro-custom"].name).toBe("Kiro Custom")
+  expect(config.provider.kiro).toBeUndefined()
+})
+
 // ---- the JSON sign-in's questions ---------------------------------------------------
 
 test("the JSON sign-in asks for the JSON, then which account only when there are several", async () => {
