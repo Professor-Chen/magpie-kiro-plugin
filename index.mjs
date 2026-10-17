@@ -2255,6 +2255,13 @@ async function pageSignIn() {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" })
       res.end(page(ok, title, text))
     }
+    // the page asks first whether it can reach this port (a browser on
+    // another computer can't), as a public page asking a local one
+    if (url.pathname === "/ping") {
+      res.writeHead(req.method === "OPTIONS" ? 204 : 200, { "Access-Control-Allow-Origin": link.origin,
+        "Access-Control-Allow-Private-Network": "true", "Access-Control-Allow-Methods": "GET", "Cache-Control": "no-store" })
+      return res.end()
+    }
     if (url.pathname !== "/import") return res.writeHead(404).end()
     if (url.searchParams.get("state") !== state) return html(false, "这个地址不是这次导入的", "在 magpie 里重新开始导入。")
     let text

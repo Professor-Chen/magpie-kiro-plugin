@@ -225,6 +225,11 @@ test("选择文件… opens the import page, and the address it sends back signs
   expect(state).toMatch(/^[A-Za-z0-9_-]{16,}$/)
   const done = a.callback()
 
+  // the page can ask whether it reaches the port, from its own origin
+  const ping = await fetch(new URL("/ping", back), { headers: { Origin: "https://example.test" } })
+  expect(ping.status).toBe(200)
+  expect(ping.headers.get("access-control-allow-origin")).toBe("https://example.test")
+  expect(ping.headers.get("access-control-allow-private-network")).toBe("true")
   // a wrong state, and an address with no account, are turned away
   const at = (q) => fetch(back.href + "?" + new URLSearchParams(q)).then((r) => r.text())
   expect(await at({ state: "nope", d: "jxx" })).toContain("不是这次导入的")

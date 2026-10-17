@@ -56,8 +56,9 @@ button:focus-visible,input:focus-visible,.drop:focus-within{outline:2px solid va
 
   <div id="go" hidden>
     <p class="ok" id="ready"></p>
+    <p class="err" id="far" hidden>这个浏览器连不上 magpie 所在电脑上的插件（magpie 在另一台电脑、服务器或 Docker 上，或者这次导入已经结束）。请复制下面的地址，粘贴到 magpie 登录框下面的地址框里，再点「Finish sign-in」。如果 magpie 里的导入已经关掉或超时，请重新开始导入。</p>
     <div class="row"><button id="open" type="button">完成导入</button></div>
-    <p class="muted">如果跳转后的页面打不开（magpie 跑在服务器或 Docker 上），把浏览器地址栏里的完整地址复制下来，粘贴到 magpie 登录框下面的地址框里，再点「Finish sign-in」。也可以直接复制下面这个地址：</p>
+    <p class="muted" id="hint">如果跳转后的页面打不开，把下面的地址复制下来，粘贴到 magpie 登录框下面的地址框里，再点「Finish sign-in」。</p>
     <div class="row">
       <input id="link" readonly aria-label="导入地址">
       <button id="copy" type="button" class="ghost">复制</button>
@@ -157,7 +158,29 @@ button:focus-visible,input:focus-visible,.drop:focus-within{outline:2px solid va
     drop.classList.remove("over")
     if (e.dataTransfer.files[0]) read(e.dataTransfer.files[0])
   }
-  $("open").onclick = () => location.assign($("link").value)
+  // the plugin's port answers /ping when this browser is on magpie's
+  // computer and the import is still waiting; otherwise the address goes
+  // to magpie by hand rather than to a page that won't load
+  async function near() {
+    try {
+      const r = await fetch(new URL("ping", back).href, { cache: "no-store", signal: AbortSignal.timeout(3000) })
+      return r.ok
+    } catch {
+      return false
+    }
+  }
+  $("open").onclick = async () => {
+    $("open").disabled = true
+    const ok = await near()
+    $("open").disabled = false
+    if (ok) return location.assign($("link").value)
+    $("far").hidden = false
+    $("hint").hidden = true
+    $("open").textContent = "仍然打开"
+    $("open").onclick = () => location.assign($("link").value)
+    $("link").focus()
+    $("link").select()
+  }
   $("copy").onclick = async () => {
     try { await navigator.clipboard.writeText($("link").value) } catch { $("link").select(); document.execCommand("copy") }
     $("copy").textContent = "已复制"
