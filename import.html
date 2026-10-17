@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>导入 Kiro 账号</title>
+<!--
+  The kiro-custom plugin's file chooser, for magpie in a window or on the
+  web. The file is read here, in the browser; nothing is sent anywhere but
+  the plugin's own address on 127.0.0.1 that the sign-in gave (redirect_uri).
+-->
+<style>
+:root{--bg:#fafafa;--fg:#222;--muted:#666;--card:#fff;--line:#ddd;--accent:#2563eb;--bad:#c0392b;--ok:#2a9d5c}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161616;--fg:#eee;--muted:#aaa;--card:#202020;--line:#3a3a3a;--accent:#60a5fa;--bad:#ef6b5b;--ok:#4cc38a}}
+:root[data-theme="dark"]{--bg:#161616;--fg:#eee;--muted:#aaa;--card:#202020;--line:#3a3a3a;--accent:#60a5fa;--bad:#ef6b5b;--ok:#4cc38a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+main{max-width:34rem;margin:0 auto;padding:2rem 16px}
+h1{font-size:1.3rem;margin:0 0 .5rem}
+p{margin:.4rem 0}
+.muted{color:var(--muted);font-size:.9rem}
+.drop{display:block;margin:1rem 0;padding:1.6rem 1rem;border:2px dashed var(--line);border-radius:10px;background:var(--card);text-align:center;cursor:pointer}
+.drop.over{border-color:var(--accent)}
+.drop input{display:block;margin:.6rem auto 0;max-width:100%}
+fieldset{border:1px solid var(--line);border-radius:10px;background:var(--card);margin:1rem 0;padding:.6rem 1rem}
+label.acct{display:block;padding:.3rem 0;cursor:pointer}
+.err{color:var(--bad)}
+.ok{color:var(--ok)}
+.row{display:flex;gap:.5rem;margin:.6rem 0}
+.row input{flex:1;min-width:0;padding:.45rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);font:13px ui-monospace,monospace}
+button{padding:.45rem 1rem;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+button.ghost{background:transparent;color:var(--accent)}
+button:focus-visible,input:focus-visible,.drop:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <h1>导入导出的 Kiro 账号</h1>
+  <p class="muted">支持 Kiro Account Manager、Cockpit、kiro.rs 的 credentials.json，以及 Kiro IDE 的 kiro-auth-token.json。文件只在这个浏览器里读取，只会交给 magpie 里的 Kiro 插件。</p>
+
+  <p id="bad" class="err" role="alert" hidden></p>
+
+  <div id="pick">
+    <label class="drop" id="drop">
+      <span>点这里选择 JSON 文件，或把文件拖进来</span>
+      <input id="file" type="file" accept=".json,application/json">
+    </label>
+  </div>
+
+  <fieldset id="which" hidden>
+    <legend>导出里有多个账号，选一个</legend>
+    <div id="accts"></div>
+  </fieldset>
+
+  <div id="go" hidden>
+    <p class="ok" id="ready"></p>
+    <div class="row"><button id="open" type="button">完成导入</button></div>
+    <p class="muted">如果跳转后的页面打不开（magpie 跑在服务器或 Docker 上），把浏览器地址栏里的完整地址复制下来，粘贴到 magpie 登录框下面的地址框里，再点「Finish sign-in」。也可以直接复制下面这个地址：</p>
+    <div class="row">
+      <input id="link" readonly aria-label="导入地址">
+      <button id="copy" type="button" class="ghost">复制</button>
+    </div>
+  </div>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id)
+  const q = new URLSearchParams(location.search)
+  const state = q.get("state") || ""
+  let back
+  try { back = new URL(q.get("redirect_uri") || "") } catch {}
+  // only the plugin's own port on this computer: a link pointing anywhere
+  // else would hand someone the account
+  const local = back && back.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(back.hostname)
+  const fail = (msg) => { $("bad").textContent = msg; $("bad").hidden = false }
+  if (!local || !/^[A-Za-z0-9_-]{16,}$/.test(state)) {
+    fail("这个页面要从 magpie 的「导入导出的账号（JSON）→ 选择文件…」打开。")
+    $("pick").hidden = true
+    return
+  }
+
+  let data = null
+  let list = []
+
+  const b64url = (bytes) => {
+    let s = ""
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+  }
+  async function pack(text) {
+    const raw = new TextEncoder().encode(text)
+    if (typeof CompressionStream === "function") {
+      const gz = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer())
+      return "g" + b64url(gz)
+    }
+    return "j" + b64url(raw)
+  }
+
+  // the one account to import, in the export's own shape
+  function chosen(i) {
+    if (Array.isArray(data)) return [data[i]]
+    if (Array.isArray(data && data.accounts)) return { ...data, accounts: [data.accounts[i]] }
+    return data
+  }
+
+  async function ready(i) {
+    const url = new URL(back.href)
+    url.searchParams.set("state", state)
+    url.searchParams.set("d", await pack(JSON.stringify(chosen(i))))
+    // magpie takes a pasted address of 16 KB at most
+    if (url.href.length > 15000) return fail("这个账号的数据太大，放不进地址里。请改用「粘贴 JSON」。")
+    $("link").value = url.href
+    const a = list[i] || {}
+    $("ready").textContent = "已读取：" + (a.email || a.nickname || (a.credentials || a.auth || a).email || "账号") + "。点「完成导入」。"
+    $("go").hidden = false
+  }
+
+  async function read(file) {
+    $("bad").hidden = true
+    $("go").hidden = true
+    $("which").hidden = true
+    try {
+      data = JSON.parse(await file.text())
+    } catch (e) {
+      return fail("这不是 JSON 文件：" + e.message)
+    }
+    list = Array.isArray(data) ? data : Array.isArray(data && data.accounts) ? data.accounts : data && typeof data === "object" ? [data] : []
+    if (!list.length) return fail("文件里没有账号。")
+    if (list.length === 1) return ready(0)
+    const box = $("accts")
+    box.textContent = ""
+    list.forEach((a, i) => {
+      const l = document.createElement("label")
+      l.className = "acct"
+      const r = document.createElement("input")
+      r.type = "radio"
+      r.name = "acct"
+      r.value = String(i)
+      r.onchange = () => ready(i)
+      const c = (a && (a.credentials || a.auth)) || a || {}
+      const st = String((a && a.status) || "active").toLowerCase()
+      l.append(r, " " + ((a && (a.email || a.nickname)) || c.email || "账号 " + (i + 1)) +
+        (c.provider ? "（" + c.provider + "）" : "") + (["active", "normal", "ok", ""].includes(st) ? "" : " · " + st))
+      box.append(l)
+    })
+    $("which").hidden = false
+  }
+
+  $("file").onchange = (e) => e.target.files[0] && read(e.target.files[0])
+  const drop = $("drop")
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over") }
+  drop.ondragleave = () => drop.classList.remove("over")
+  drop.ondrop = (e) => {
+    e.preventDefault()
+    drop.classList.remove("over")
+    if (e.dataTransfer.files[0]) read(e.dataTransfer.files[0])
+  }
+  $("open").onclick = () => location.assign($("link").value)
+  $("copy").onclick = async () => {
+    try { await navigator.clipboard.writeText($("link").value) } catch { $("link").select(); document.execCommand("copy") }
+    $("copy").textContent = "已复制"
+  }
+})()
+</script>
+</body>
+</html>

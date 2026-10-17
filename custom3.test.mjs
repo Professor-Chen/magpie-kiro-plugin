@@ -177,7 +177,7 @@ test("the provider id is kiro-custom, beside the official kiro", async () => {
 // ---- the JSON sign-in's questions ---------------------------------------------------
 
 test("the JSON sign-in uses the old magpie buttons, then which account only when there are several", async () => {
-  const { KiroAuthPlugin, _internal } = await import("./index.mjs")
+  const { KiroAuthPlugin } = await import("./index.mjs")
   const hooks = await KiroAuthPlugin({ client: {} }, {})
   const m = hooks.auth.methods.find((x) => /JSON/.test(x.label))
   const q1 = await m.ask({})
@@ -202,21 +202,44 @@ test("the JSON sign-in uses the old magpie buttons, then which account only when
   expect(await m.ask({ json: "{nope" })).toBeNull()
   // OpenCode still asks with a text prompt, not the magpie buttons
   expect(m.prompts[0]).toMatchObject({ type: "text", key: "json" })
-  // a chosen file is kept for the sign-in; the prompt answer is only "file"
-  _internal.setExportChooser(async () => one)
-  try {
-    expect(await m.ask({ how: "file" })).toBeNull()
-    expect(_internal.importSource({ how: "file" })).toBe(one)
-    _internal.setExportChooser(async () => two)
-    const which = await m.ask({ how: "file" })
-    expect(which.key).toBe("index")
-    expect(await m.ask({ how: "file", index: "1" })).toBeNull()
-    expect(_internal.importSource({ how: "file", index: "1" })).toBe(two)
-    _internal.setExportChooser(async () => "")
-    const missed = await m.ask({ how: "file" })
-    expect(missed).toMatchObject({ type: "text", key: "json" })
-    expect(missed.message).toContain("没有选择文件")
-  } finally {
-    _internal.setExportChooser(null)
-  }
+  // a file is chosen in the browser, on the import page: no more questions
+  expect(await m.ask({ how: "file" })).toBeNull()
+})
+
+// ---- the import page --------------------------------------------------------------
+
+test("选择文件… opens the import page, and the address it sends back signs in", async () => {
+  const { KiroAuthPlugin, _internal } = await import("./index.mjs")
+  const { gzipSync } = await import("node:zlib")
+  const hooks = await KiroAuthPlugin({ client: {} }, { importPage: "https://example.test/import.html" })
+  const m = hooks.auth.methods.find((x) => /JSON/.test(x.label))
+  const a = await m.authorize({ how: "file" })
+  expect(a.method).toBe("auto")
+  const page = new URL(a.url)
+  expect(page.origin + page.pathname).toBe("https://example.test/import.html")
+  const back = new URL(page.searchParams.get("redirect_uri"))
+  // magpie finishes a pasted address only for a port on this computer
+  expect(back.protocol).toBe("http:")
+  expect(back.hostname).toBe("127.0.0.1")
+  const state = page.searchParams.get("state")
+  expect(state).toMatch(/^[A-Za-z0-9_-]{16,}$/)
+  const done = a.callback()
+
+  // a wrong state, and an address with no account, are turned away
+  const at = (q) => fetch(back.href + "?" + new URLSearchParams(q)).then((r) => r.text())
+  expect(await at({ state: "nope", d: "jxx" })).toContain("不是这次导入的")
+  expect(await at({ state, d: "g" + Buffer.from("junk").toString("base64url") })).toContain("没有完整的账号")
+
+  // no refresh token: it reaches the sign-in, which says why, with no network
+  const text = JSON.stringify({ accounts: [{ email: "a@x", credentials: { authMethod: "social" } }] })
+  const d = "g" + gzipSync(Buffer.from(text)).toString("base64url")
+  expect(await at({ state, d })).toContain("已交给 magpie")
+  const r = await done
+  expect(r.type).toBe("failed")
+  expect(r.error).toContain("no refresh token")
+  // the port is closed once it has the account
+  expect(await fetch(back.href).then(() => "open", () => "closed")).toBe("closed")
+
+  expect(_internal.importPacked("j" + Buffer.from(text).toString("base64url"))).toBe(text)
+  expect(() => _internal.importPacked("x")).toThrow()
 })

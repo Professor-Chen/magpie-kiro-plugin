@@ -17,6 +17,7 @@
 // talks to) as a conversation, and turns the AWS event stream it answers
 // with back into Messages' events.
 import { createServer } from "node:http"
+import { gunzipSync } from "node:zlib"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { existsSync, statSync } from "node:fs"
@@ -40,6 +41,10 @@ const management = (region) => `https://management.${region}.kiro.dev`
 const refreshURL = (region) => `https://prod.${region}.auth.desktop.kiro.dev/refreshToken`
 // the ports Kiro's sign-in page sends the browser back to, the IDE's
 const CALLBACK_PORTS = [3128, 4649, 6588, 8008, 9091, 49153, 50153, 51153, 52153, 53153]
+// import.html, where 选择文件… chooses an export (pageSignIn); importPage
+// (KIRO_IMPORT_PAGE) puts a copy of it elsewhere
+const IMPORT_PAGE = "https://professor-chen.github.io/magpie-kiro-plugin/import.html"
+const IMPORT_MAX = 256 << 10 // the account's text, unpacked
 // what the IDE asks AWS for
 const SCOPES = ["codewhisperer:completions", "codewhisperer:analysis", "codewhisperer:conversations",
   "codewhisperer:transformations", "codewhisperer:taskassist"]
@@ -90,7 +95,7 @@ const SIGN_IN_TIMEOUT = 10 * 60 * 1000
 //     "off" leaves them to cacheRatio
 const DEFAULTS = { cacheRatio: 0, fingerprint: "ide", kiroVersion: "0.9.2", nodeVersion: "22.21.1", systemVersion: "",
   endpoint: "kiro", retries: 2, thinkingMin: 1024, thinkingMax: 64000, budgets: "", adaptive: false, effortField: "auto",
-  minInterval: 0, toolDescriptionLimit: 9216, meter: "on" }
+  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", importPage: "" }
 const cfg = { ...DEFAULTS }
 // BUDGETS are each effort's thinking budget (xhigh its own level: #120)
 const BASE_BUDGETS = { low: 10000, medium: 20000, high: 30000, xhigh: 50000, max: 64000 }
@@ -115,6 +120,8 @@ function configure(o = {}) {
   cfg.minInterval = Math.trunc(clamp(pick("minInterval", "KIRO_MIN_INTERVAL_MS"), 0, 60000, 0))
   cfg.toolDescriptionLimit = Math.trunc(clamp(pick("toolDescriptionLimit", "KIRO_TOOL_DESCRIPTION_LIMIT"), 256, 100000, 9216))
   cfg.meter = String(pick("meter", "KIRO_METER")).toLowerCase() === "off" ? "off" : "on"
+  const ip = String(pick("importPage", "KIRO_IMPORT_PAGE"))
+  cfg.importPage = /^https?:\/\//i.test(ip) ? ip : IMPORT_PAGE
   Object.assign(BUDGETS, BASE_BUDGETS)
   const b = pick("budgets", "KIRO_BUDGETS")
   const pairs = b && typeof b === "object" ? Object.entries(b) : String(b ?? "").split(",").map((s) => s.split("="))
@@ -2204,81 +2211,78 @@ async function ownSignIn() {
 // can't make more accounts), naming them so each can be imported with its
 // number. The tokens are checked by a refresh before they are kept.
 //
-// The installed magpie only draws a select (buttons) or a text box. It
-// has no file control, and a question it does not know is drawn as text.
-// Choosing a file therefore opens the system dialog from here, while that
-// prompt request is in flight. The dialog has to finish inside magpie's
-// one-minute prompt; the wait below stops short of that and offers the
-// paste box instead. The file's text is kept aside (pendingImport): ask
-// can only hand back the next question, not fill inputs itself.
-let pendingImport = ""
-let chooseExport = pickExportFile
+// The installed magpie only draws a select (buttons) or a text box, and
+// on the web the plugin runs on another computer than the browser, so a
+// file can only be chosen in a page of the browser's own. 选择文件… opens
+// import.html (importPage): it reads the file there and sends the browser
+// back to a port of the plugin's on 127.0.0.1 (redirect_uri), the account
+// in the address. A browser on another computer can't reach that port,
+// but magpie takes the address pasted under the sign-in and opens it on
+// the plugin's computer (its pasted-callback for a plugin, by the port
+// redirect_uri names), so the same page works in the window, on the web
+// and in Docker.
 
-function runCaptured(file, args, timeout = 55_000) {
-  return new Promise((resolve) => {
-    execFile(file, args, { windowsHide: true, timeout, maxBuffer: 1 << 20 }, (err, stdout) => {
-      resolve(String(stdout || "").trim())
-    })
+// importPacked is the account the page put in its address: "g" and gzip,
+// or "j" and the text, base64url either way
+function importPacked(d) {
+  const s = String(d ?? "")
+  const bytes = Buffer.from(s.slice(1), "base64url")
+  if (s[0] === "g") return gunzipSync(bytes, { maxOutputLength: IMPORT_MAX }).toString("utf8")
+  if (s[0] === "j" && bytes.length <= IMPORT_MAX) return bytes.toString("utf8")
+  throw new Error("the address holds no account")
+}
+
+// pageSignIn waits on its own port for the address import.html sends the
+// browser to, and signs in with the account it carries.
+async function pageSignIn() {
+  const server = createServer()
+  await new Promise((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", resolve)
   })
-}
-
-// pickExportPath is the file the person chose, or "" when they cancelled
-// or no dialog could be shown. The path comes back base64 on Windows so a
-// name outside the console code page is not lost.
-async function pickExportPath() {
-  if (process.platform === "win32") {
-    const script = `
-Add-Type -AssemblyName System.Windows.Forms
-$owner = New-Object System.Windows.Forms.Form
-$owner.TopMost = $true
-$owner.ShowInTaskbar = $false
-$owner.Opacity = 0
-$owner.Show()
-$d = New-Object System.Windows.Forms.OpenFileDialog
-$d.Title = '选择 Kiro 账号导出文件'
-$d.Filter = 'JSON (*.json)|*.json|所有文件 (*.*)|*.*'
-$d.CheckFileExists = $true
-$ok = $d.ShowDialog($owner)
-$owner.Close()
-$owner.Dispose()
-if ($ok -eq [System.Windows.Forms.DialogResult]::OK) {
-  [Console]::Out.WriteLine([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($d.FileName)))
-}
-`
-    // PowerShell 5 writes a pipe as UTF-16. The payload is base64, so dropping
-    // the NULs leaves it intact either way.
-    const line = (await runCaptured("powershell.exe", ["-NoProfile", "-STA", "-Command", script]))
-      .replace(/\0/g, "").replace(/^\uFEFF/, "")
-      .split(/\r?\n/).map((s) => s.trim()).filter((s) => /^[A-Za-z0-9+/=]+$/.test(s)).pop() || ""
-    if (!line) return ""
-    const path = Buffer.from(line, "base64").toString("utf8").replace(/\0/g, "").trim()
-    return path
+  const port = server.address().port
+  const state = randomBytes(24).toString("base64url")
+  const link = new URL(cfg.importPage)
+  link.searchParams.set("redirect_uri", `http://127.0.0.1:${port}/import`)
+  link.searchParams.set("state", state)
+  let settle
+  const got = new Promise((r) => (settle = r))
+  // magpie gives a sign-in ten minutes; the port goes with it
+  const timer = setTimeout(() => settle({ error: "没有收到账号，导入已超时；重新开始导入" }), 11 * 60_000)
+  server.on("request", (req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1")
+    const html = (ok, title, text) => {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" })
+      res.end(page(ok, title, text))
+    }
+    if (url.pathname !== "/import") return res.writeHead(404).end()
+    if (url.searchParams.get("state") !== state) return html(false, "这个地址不是这次导入的", "在 magpie 里重新开始导入。")
+    let text
+    try {
+      text = importPacked(url.searchParams.get("d"))
+      JSON.parse(text)
+    } catch (e) {
+      return html(false, "地址里没有完整的账号", "重新在导入页里选择文件，并复制完整的地址。")
+    }
+    html(true, "账号已交给 magpie", "可以关掉这个页面，回到 magpie。")
+    settle({ text })
+  })
+  return {
+    url: link.href,
+    instructions: "magpie 打开了导入页：在页面里选择导出的 JSON 文件，再点「完成导入」。如果之后的页面打不开（magpie 在服务器或 Docker 上），把它的完整地址粘贴到下面。",
+    method: "auto",
+    callback: async () => {
+      const r = await got
+      clearTimeout(timer)
+      server.close()
+      if (r.error) return { type: "failed", error: r.error }
+      return importSignIn(r.text, 1)
+    },
   }
-  if (process.platform === "darwin") {
-    return await runCaptured("osascript", [
-      "-e", "try",
-      "-e", 'POSIX path of (choose file with prompt "选择 Kiro 账号导出文件")',
-      "-e", "on error",
-      "-e", '""',
-      "-e", "end try",
-    ])
-  }
-  const zenity = await runCaptured("zenity", ["--file-selection", "--title=选择 Kiro 账号导出文件", "--file-filter=JSON | *.json", "--file-filter=所有文件 | *"])
-  if (zenity) return zenity
-  return await runCaptured("kdialog", ["--getopenfilename", ".", "*.json|JSON"])
-}
-
-async function pickExportFile() {
-  const path = (await pickExportPath()).trim().replace(/^["']|["']$/g, "")
-  if (!path) return ""
-  return await readFile(path, "utf8")
 }
 
 function importSource(inputs = {}) {
-  const pasted = String(inputs.json ?? "").trim()
-  const held = pendingImport
-  pendingImport = ""
-  return pasted || held
+  return String(inputs.json ?? "").trim()
 }
 
 function pastePrompt(message) {
@@ -2308,33 +2312,44 @@ function jsonSignIn(inputs = {}) {
     instructions: "Imports an account exported by Kiro Account Manager, Cockpit or kiro.rs (credentials.json).",
     method: "auto",
     callback: async () => {
-      let found
+      let text
       try {
-        found = importedAccounts(await jsonText(importSource(inputs)))
+        text = await jsonText(importSource(inputs))
       } catch (e) {
         return { type: "failed", error: e.message }
       }
-      const { accounts, skipped } = found
-      if (!accounts.length) return { type: "failed", error: "没有可导入的账号" + (skipped.length ? "：" + skipped.join("; ") : "") }
-      const n = Math.trunc(Number(inputs.index || 1))
-      if (!(n >= 1 && n <= accounts.length))
-        return { type: "failed", error: `这份导出有 ${accounts.length} 个账号：${accounts.map((a, i) => `${i + 1}. ${a.user}`).join(", ")}` }
-      const { auth, user } = accounts[n - 1]
-      let c = { ...auth, refresh: auth.refresh, expires: auth.access ? auth.expires : 1, profile: auth.profileArn ?? "",
-        builderID: isBuilderID(auth.loginProvider), own: true }
-      try {
-        // checked, and fresh: an export's access token is often spent
-        if (!fresh(c)) c = await refresh(c)
-      } catch (e) {
-        return { type: "failed", error: `${user}: ${e.message}` }
-      }
-      const who = await whoIs(c).catch(() => ({ email: "", plan: "" }))
-      return { type: "success", provider: ID, access: c.access, refresh: c.refresh, expires: c.expires, method: auth.method, region: auth.region,
-        ...(c.profile ? { profileArn: c.profile } : {}), ...(auth.clientId ? { clientId: auth.clientId, clientSecret: auth.clientSecret } : {}),
-        ...(auth.loginProvider ? { loginProvider: auth.loginProvider } : {}), ...(auth.machineId ? { machineId: auth.machineId } : {}),
-        accountId: who.email || user, ...(who.plan ? { plan: who.plan } : {}) }
+      return importSignIn(text, inputs.index || 1)
     },
   }
+}
+
+// importSignIn is the sign-in for account n (1 for the first) of an export
+async function importSignIn(text, n) {
+  let found
+  try {
+    found = importedAccounts(text)
+  } catch (e) {
+    return { type: "failed", error: e.message }
+  }
+  const { accounts, skipped } = found
+  if (!accounts.length) return { type: "failed", error: "没有可导入的账号" + (skipped.length ? "：" + skipped.join("; ") : "") }
+  n = Math.trunc(Number(n))
+  if (!(n >= 1 && n <= accounts.length))
+    return { type: "failed", error: `这份导出有 ${accounts.length} 个账号：${accounts.map((a, i) => `${i + 1}. ${a.user}`).join(", ")}` }
+  const { auth, user } = accounts[n - 1]
+  let c = { ...auth, refresh: auth.refresh, expires: auth.access ? auth.expires : 1, profile: auth.profileArn ?? "",
+    builderID: isBuilderID(auth.loginProvider), own: true }
+  try {
+    // checked, and fresh: an export's access token is often spent
+    if (!fresh(c)) c = await refresh(c)
+  } catch (e) {
+    return { type: "failed", error: `${user}: ${e.message}` }
+  }
+  const who = await whoIs(c).catch(() => ({ email: "", plan: "" }))
+  return { type: "success", provider: ID, access: c.access, refresh: c.refresh, expires: c.expires, method: auth.method, region: auth.region,
+    ...(c.profile ? { profileArn: c.profile } : {}), ...(auth.clientId ? { clientId: auth.clientId, clientSecret: auth.clientSecret } : {}),
+    ...(auth.loginProvider ? { loginProvider: auth.loginProvider } : {}), ...(auth.machineId ? { machineId: auth.machineId } : {}),
+    accountId: who.email || user, ...(who.plan ? { plan: who.plan } : {}) }
 }
 
 async function bodyOf(input, init) {
@@ -2407,38 +2422,21 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
               placeholder: '{"accounts":[…]} or C:\\path\\account.json' },
           ],
           ask: async (inputs = {}) => {
-            if (!("how" in inputs) && !("json" in inputs)) {
-              pendingImport = ""
+            if (!("how" in inputs) && !("json" in inputs))
               return {
                 type: "select", key: "how", message: "导入导出的 Kiro 账号",
                 options: [
-                  { label: "选择文件…", value: "file", hint: "Kiro Account Manager、Cockpit、kiro.rs，或 IDE 的 kiro-auth-token.json" },
+                  { label: "选择文件…", value: "file", hint: "在浏览器里打开导入页选择文件，桌面窗口和 web 端都能用" },
                   { label: "粘贴 JSON", value: "paste" },
                 ],
               }
-            }
-            if (inputs.how === "paste" && !("json" in inputs)) {
-              pendingImport = ""
-              return pastePrompt("粘贴账号的 JSON，或填写文件路径")
-            }
+            // the page chooses the file and the account (pageSignIn)
+            if (inputs.how === "file") return null
+            if (!("json" in inputs)) return pastePrompt("粘贴账号的 JSON，或填写文件路径")
             if ("index" in inputs) return null
-            let raw = inputs.json
-            if (!raw && inputs.how === "file") {
-              try {
-                raw = await chooseExport()
-              } catch (e) {
-                pendingImport = ""
-                return pastePrompt(`读不了这个文件（${e.code ?? e.message}）。粘贴 JSON，或填写文件路径`)
-              }
-              if (!raw) {
-                pendingImport = ""
-                return pastePrompt("没有选择文件。粘贴 JSON，或填写文件路径")
-              }
-              pendingImport = raw
-            }
             let found
             try {
-              found = importedAccounts(await jsonText(raw))
+              found = importedAccounts(await jsonText(inputs.json))
             } catch {
               return null // said when it signs in
             }
@@ -2446,7 +2444,7 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
             return { type: "select", key: "index", message: "导出里的哪个账号？",
               options: found.accounts.map((a, i) => ({ label: a.user, value: String(i + 1), hint: a.auth.method === "idc" ? "IAM Identity Center" : a.auth.loginProvider || "" })) }
           },
-          authorize: async (inputs) => jsonSignIn(inputs),
+          authorize: async (inputs = {}) => (inputs.how === "file" ? pageSignIn() : jsonSignIn(inputs)),
         },
       ],
     },
@@ -2479,7 +2477,6 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
 
 // for tests
 export const _internal = { generate, refresh, usageOf, buildKiro, events, reply, failure, toolID, toolName, toolNames, thinking, configModel, runtimeModel, readCLI, readIDE, regionOf, planName, frames,
-  importedAccounts, expiresOf, machineIdOf, normalizeMachineId, kiroHeaders, chatURL, configure, cfg, withCache, estimateInput, jsonSignIn, importSource,
-  setExportChooser: (fn) => { chooseExport = fn || pickExportFile },
+  importedAccounts, expiresOf, machineIdOf, normalizeMachineId, kiroHeaders, chatURL, configure, cfg, withCache, estimateInput, jsonSignIn, importSource, importPacked, pageSignIn,
   thinkingPrefix, effortField, BUDGETS, TextCalls, realClose, refreshUA, SUSPENDED, meter, PRICES, learned, turns, charsOf, windowsOf: () => windows,
   setPing: (ms) => (PING_MS = ms) }

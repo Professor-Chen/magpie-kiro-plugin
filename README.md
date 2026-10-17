@@ -43,11 +43,13 @@ published as its own repository, not as a fork.
 - **Kiro API Key（ksk_…）**: sent with `tokentype: API_KEY`. Its profile is
   found with `GetProfile`.
 - **导入导出的账号（JSON）**: in magpie the next step is two buttons,
-  选择文件… and 粘贴 JSON. 选择文件… opens the system file dialog. 粘贴 JSON
-  is the text box, which also takes a file path. The installed magpie only
-  draws buttons and a text box, and it shows this plugin's words as they
-  are written, so those labels are Chinese. OpenCode asks for the JSON or
-  the path of the file. Accepted exports are Kiro Account Manager,
+  选择文件… and 粘贴 JSON. 选择文件… opens the import page in the browser,
+  which reads the file there, so it works in magpie's window and on the
+  web alike (see below). 粘贴 JSON is the text box, which also takes a
+  path on magpie's computer. The installed magpie only draws buttons and
+  a text box, and it shows this plugin's words as they are written, so
+  those labels are Chinese. OpenCode asks for the JSON or the path of the
+  file. Accepted exports are Kiro Account Manager,
   Cockpit, kiro.rs's `credentials.json`, and the IDE's
   `kiro-auth-token.json`. Details are under
   [Importing an exported account](#importing-an-exported-account-this-fork).
@@ -121,8 +123,21 @@ and Auto have the thinking variants.
 ## Importing an exported account (this fork)
 
 The sign-in method *导入导出的账号（JSON）* takes the JSON, or the path of
-the file holding it. In magpie, 选择文件… opens the system file dialog and
+the file holding it. In magpie, 选择文件… opens the import page and
 粘贴 JSON takes the text or a path. OpenCode asks for that text or path.
+
+The import page ([`import.html`](import.html), served by GitHub Pages at
+`https://professor-chen.github.io/magpie-kiro-plugin/import.html`; the
+`importPage` option or `KIRO_IMPORT_PAGE` names another copy) reads the
+file in the browser, asks which account when it holds several, and sends
+the browser back to a port the plugin opened on `127.0.0.1` for this
+import, the account gzip'd in the address. Nothing goes anywhere else.
+On the web, from another computer or with magpie in Docker, that page
+won't load: copy its whole address (or the page's own copy of it) into
+the address box magpie shows under the sign-in, and magpie opens it on
+its own computer, as for Kiro's browser sign-in. The port waits as long
+as magpie's sign-in does, ten minutes.
+
 Accepted exports:
 
 - Kiro Account Manager: `{version, exportedAt, accounts: [{email, credentials: {…}, machineId, status}]}`
@@ -162,6 +177,7 @@ Set as the plugin's options in magpie's `plugins.json`
 | `minInterval` | `KIRO_MIN_INTERVAL_MS` | `0` | The least time between two requests of one account. |
 | `toolDescriptionLimit` | `KIRO_TOOL_DESCRIPTION_LIMIT` | `9216` | A tool's description is cut at this. |
 | `meter` | `KIRO_METER` | `on` | `on`: the usage's cache tokens, and a native thinker's unshown reasoning, are read from what Kiro metered (below); `off`: `cacheRatio` stands in. |
+| `importPage` | `KIRO_IMPORT_PAGE` | GitHub Pages | The import page 选择文件… opens: a copy of `import.html` served elsewhere (http or https). |
 
 ### Usage, read from what Kiro metered (this fork)
 
