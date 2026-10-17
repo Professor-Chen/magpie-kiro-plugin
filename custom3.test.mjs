@@ -211,7 +211,7 @@ test("the JSON sign-in uses the old magpie buttons, then which account only when
 test("选择文件… opens the import page, and the address it sends back signs in", async () => {
   const { KiroAuthPlugin, _internal } = await import("./index.mjs")
   const { gzipSync } = await import("node:zlib")
-  const hooks = await KiroAuthPlugin({ client: {} }, { importPage: "https://example.test/import.html" })
+  const hooks = await KiroAuthPlugin({ client: {} }, { importPage: "https://example.test/import.html", importRelay: "off" })
   const m = hooks.auth.methods.find((x) => /JSON/.test(x.label))
   const a = await m.authorize({ how: "file" })
   expect(a.method).toBe("auto")
@@ -275,36 +275,67 @@ test("the import page's accounts are all kept: the first as the sign-in, the oth
   expect((await _internal.importAll(client, JSON.stringify([{ email: "c@x", credentials: {} }]))).type).toBe("failed")
 })
 
-test("in Docker the import port is published, and the page sends the browser there", async () => {
+test("off this computer, the page hands the import over through the relay, sealed", async () => {
   const { KiroAuthPlugin, _internal } = await import("./index.mjs")
-  const was = process.env.MAGPIE_PUBLIC_URL
-  try {
-    _internal.configure({ importListen: "4567" })
-    process.env.MAGPIE_PUBLIC_URL = "https://gw.example.test/"
-    expect(_internal.importWhere()).toMatchObject({ host: "0.0.0.0", port: 4567 })
-    expect(_internal.importWhere().back()).toBe("http://gw.example.test:4567/import")
-    _internal.configure({ importListen: "127.0.0.1:4567", importCallback: "http://nas.lan:14567/" })
-    expect(_internal.importWhere()).toMatchObject({ host: "127.0.0.1", port: 4567 })
-    expect(_internal.importWhere().back()).toBe("http://nas.lan:14567/import")
-    _internal.configure({})
-    expect(_internal.importWhere()).toMatchObject({ host: "127.0.0.1", port: 0 })
+  const { gzipSync } = await import("node:zlib")
+  const key = Buffer.alloc(32, 7)
+  expect(_internal.unseal(key, _internal.seal(key, "账号"))).toBe("账号")
+  expect(() => _internal.unseal(Buffer.alloc(32, 8), _internal.seal(key, "x"))).toThrow()
 
-    // a real port: the link says direct
-    delete process.env.MAGPIE_PUBLIC_URL
-    const hooks = await KiroAuthPlugin({ client: {} }, { importPage: "https://example.test/import.html", importListen: "127.0.0.1:0" })
-    expect(_internal.importWhere().port).toBe(0)
+  // a stand-in ntfy: one topic's stream, and its reply topic
+  const posts = []
+  let streamed
+  const relay = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(req) {
+      const u = new URL(req.url)
+      if (req.method === "POST") {
+        posts.push({ path: u.pathname, body: await req.text() })
+        return new Response("{}")
+      }
+      if (u.pathname.endsWith("/json")) {
+        return new Response(new ReadableStream({ start(c) { streamed = c } }), { headers: { "Content-Type": "application/x-ndjson" } })
+      }
+      return new Response("no", { status: 404 })
+    },
+  })
+  try {
+    const hooks = await KiroAuthPlugin({ client: {} }, { importPage: "https://example.test/import.html", importRelay: `http://127.0.0.1:${relay.port}` })
     const m = hooks.auth.methods.find((x) => /JSON/.test(x.label))
     const a = await m.authorize({ how: "file" })
-    const page = new URL(a.url)
-    expect(page.searchParams.get("direct")).toBe("1")
-    const back = new URL(page.searchParams.get("redirect_uri"))
+    const frag = new URLSearchParams(new URL(a.url).hash.slice(1))
+    const topic = new URL(frag.get("relay")).pathname
+    expect(topic).toMatch(/^\/kiro-[A-Za-z0-9_-]{24}$/)
+    const k = Buffer.from(frag.get("k"), "base64url")
+    expect(k.length).toBe(32)
+    // the key is never in the query, which a server would see
+    expect(new URL(a.url).search).not.toContain(frag.get("k"))
     const done = a.callback()
-    const r = await fetch(back.href + "?" + new URLSearchParams({ state: page.searchParams.get("state"), d: "j" + Buffer.from("[]").toString("base64url") }))
-    expect(await r.text()).toContain("没有导入账号")
-    expect((await done).type).toBe("failed")
+    for (let i = 0; i < 50 && !streamed; i++) await Bun.sleep(20)
+    const enc = (o) => new TextEncoder().encode(JSON.stringify(o) + String.fromCharCode(10))
+    // someone else's message on the topic is passed over
+    streamed.enqueue(enc({ id: "1", event: "message", message: "junk" }))
+    const text = JSON.stringify([{ email: "a@x", credentials: { authMethod: "social" } }])
+    streamed.enqueue(enc({ id: "2", event: "message", message: _internal.seal(k, "g" + gzipSync(Buffer.from(text)).toString("base64url")) }))
+    const r = await done
+    expect(r.type).toBe("failed")
+    expect(r.error).toContain("no refresh token")
+    for (let i = 0; i < 50 && !posts.length; i++) await Bun.sleep(20)
+    expect(posts[0].path).toBe(topic + "-r")
+    expect(JSON.parse(_internal.unseal(k, posts[0].body))).toMatchObject({ ok: false, title: "没有导入账号" })
   } finally {
-    if (was === undefined) delete process.env.MAGPIE_PUBLIC_URL
-    else process.env.MAGPIE_PUBLIC_URL = was
-    _internal.configure({})
+    relay.stop(true)
   }
+})
+
+test("importRelay off leaves the link without a relay", async () => {
+  const { KiroAuthPlugin } = await import("./index.mjs")
+  const hooks = await KiroAuthPlugin({ client: {} }, { importPage: "https://example.test/import.html", importRelay: "off" })
+  const a = await hooks.auth.methods.find((x) => /JSON/.test(x.label)).authorize({ how: "file" })
+  expect(new URL(a.url).hash).toBe("")
+  const back = new URL(new URL(a.url).searchParams.get("redirect_uri"))
+  const done = a.callback()
+  await fetch(back.href + "?" + new URLSearchParams({ state: new URL(a.url).searchParams.get("state"), d: "j" + Buffer.from("[]").toString("base64url") }))
+  expect((await done).type).toBe("failed")
 })

@@ -7,8 +7,10 @@
 <title>导入 Kiro 账号</title>
 <!--
   The kiro-custom plugin's file chooser, for magpie in a window or on the
-  web. The files are read here, in the browser; nothing is sent anywhere
-  but the plugin's own address that the sign-in gave (redirect_uri).
+  web. The files are read here, in the browser. The accounts ticked go to
+  the plugin's own port on 127.0.0.1 when this browser reaches it, else
+  sealed (AES-GCM, the key only in this page's #fragment) through the
+  relay the sign-in named, else as an address to paste into magpie.
 -->
 <style>
 :root{--bg:#fafafa;--fg:#222;--muted:#666;--card:#fff;--line:#ddd;--accent:#2563eb;--bad:#c0392b;--ok:#2a9d5c}
@@ -44,7 +46,7 @@ code{overflow-wrap:anywhere}
 <body>
 <main>
   <h1>导入导出的 Kiro 账号</h1>
-  <p class="muted">支持 Kiro Account Manager、Cockpit、kiro.rs 的 credentials.json，以及 Kiro IDE 的 kiro-auth-token.json，可以一次选多个文件。文件只在这个浏览器里读取，只会交给 magpie 里的 Kiro 插件。</p>
+  <p class="muted">支持 Kiro Account Manager、Cockpit、kiro.rs 的 credentials.json，以及 Kiro IDE 的 kiro-auth-token.json，可以一次选多个文件。文件只在这个浏览器里读取。magpie 不在这台电脑上时，账号先加密，再经公共中转 ntfy.sh 交给插件；密钥只在这个页面的链接里，中转看不到内容。</p>
 
   <p id="bad" class="err" role="alert" hidden></p>
 
@@ -63,11 +65,10 @@ code{overflow-wrap:anywhere}
 
   <div id="go" hidden>
     <p class="ok" id="ready" aria-live="polite"></p>
-    <p class="muted" id="dest"></p>
-    <p class="err" id="far" hidden>这个浏览器连不上 magpie 所在电脑上的插件（magpie 在另一台电脑、服务器或 Docker 上，或者这次导入已经结束）。请复制下面的地址，粘贴到 magpie 登录框下面的地址框里，再点「Finish sign-in」。如果 magpie 里的导入已经关掉或超时，请重新开始导入。</p>
+    <p id="status" aria-live="polite" hidden></p>
     <div class="row"><button id="open" class="main" type="button">完成导入</button></div>
-    <div id="paste">
-      <p class="muted" id="hint">如果跳转后的页面打不开，把下面的地址复制下来，粘贴到 magpie 登录框下面的地址框里，再点「Finish sign-in」。</p>
+    <div id="paste" hidden>
+      <p class="err" id="far">没能自动交给 magpie（<span id="why"></span>）。地址已经复制好了：回到 magpie，粘贴到登录框下面的地址框里，再点「Finish sign-in」。如果 magpie 里的导入已经关掉或超时，请重新开始导入。</p>
       <div class="row">
         <input id="link" readonly aria-label="导入地址">
         <button id="copy" type="button" class="ghost">复制</button>
@@ -80,25 +81,27 @@ code{overflow-wrap:anywhere}
   const $ = (id) => document.getElementById(id)
   const q = new URLSearchParams(location.search)
   const state = q.get("state") || ""
-  // direct: the plugin's port is published (magpie in Docker), and the
-  // browser goes to it straight; else it is on 127.0.0.1 alone
-  const direct = q.get("direct") === "1"
   let back
   try { back = new URL(q.get("redirect_uri") || "") } catch {}
-  const loopback = back && ["127.0.0.1", "localhost", "[::1]"].includes(back.hostname)
-  const good = back && back.protocol === "http:" && back.pathname === "/import" && (loopback || direct)
+  // only the plugin's own port on this computer: a link pointing anywhere
+  // else would hand someone the accounts
+  const good = back && back.protocol === "http:" && back.pathname === "/import" && ["127.0.0.1", "localhost", "[::1]"].includes(back.hostname)
   const fail = (msg) => { $("bad").textContent = msg; $("bad").hidden = false }
   if (!good || !/^[A-Za-z0-9_-]{16,}$/.test(state)) {
     fail("这个页面要从 magpie 的「导入导出的账号（JSON）→ 选择文件…」打开。")
     $("pick").hidden = true
     return
   }
-  if (!loopback) $("dest").textContent = "账号会直接发到 magpie 的导入端口：" + back.host + "。不是你自己的 magpie 就别继续。"
-  // magpie takes a pasted address of 16 KB at most; a browser's own is
-  // far longer, and the plugin reads up to 1 MB
-  const LIMIT = direct ? 900000 : 15000
+  // the relay and its key, from the fragment the browser never sends
+  const frag = new URLSearchParams(location.hash.slice(1))
+  let relay = ""
+  try { const r = new URL(frag.get("relay") || ""); if (r.protocol === "https:" || r.protocol === "http:") relay = r.href.replace(/\/+$/, "") } catch {}
+  const rawKey = frag.get("k") || ""
+  // magpie takes a pasted address of 16 KB at most
+  const LIMIT = 15000
 
   let items = [] // {acct, from}
+  let packed = ""
 
   const b64url = (bytes) => {
     let s = ""
@@ -138,22 +141,21 @@ code{overflow-wrap:anywhere}
   async function ready() {
     const list = picked()
     $("bad").hidden = true
-    $("far").hidden = true
     if (!list.length) {
       $("go").hidden = true
       return
     }
+    packed = await pack(JSON.stringify(list.map(slim)))
     const url = new URL(back.href)
     url.searchParams.set("state", state)
-    url.searchParams.set("d", await pack(JSON.stringify(list.map(slim))))
-    if (url.href.length > LIMIT) {
-      $("go").hidden = true
-      return fail(`选了 ${list.length} 个账号，数据太大，放不进一个地址。请少选一些，分几次导入。`)
-    }
+    url.searchParams.set("d", packed)
     $("link").value = url.href
     $("ready").textContent = `已选 ${list.length} 个账号。点「完成导入」。`
-    $("paste").hidden = direct
+    $("paste").hidden = true
+    $("status").hidden = true
     $("open").textContent = "完成导入"
+    $("open").hidden = false
+    $("open").disabled = false
     $("open").onclick = finish
     $("go").hidden = false
   }
@@ -217,8 +219,7 @@ code{overflow-wrap:anywhere}
   $("none").onclick = () => tick(false)
 
   // the plugin's port answers /ping when this browser is on magpie's
-  // computer and the import is still waiting; otherwise the address goes
-  // to magpie by hand rather than to a page that won't load
+  // computer and the import is still waiting
   async function near() {
     try {
       const r = await fetch(new URL("ping", back).href, { cache: "no-store", signal: AbortSignal.timeout(3000) })
@@ -227,18 +228,76 @@ code{overflow-wrap:anywhere}
       return false
     }
   }
+
+  const unb64 = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0))
+  async function cryptoKey() {
+    return crypto.subtle.importKey("raw", unb64(rawKey), "AES-GCM", false, ["encrypt", "decrypt"])
+  }
+  async function seal(key, text) {
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const body = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(text)))
+    return b64url(iv) + "." + b64url(body)
+  }
+  async function unseal(key, sealed) {
+    const [iv, body] = String(sealed).trim().split(".")
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(iv) }, key, unb64(body)))
+  }
+
+  // the relay: the sealed accounts go to the topic, and the plugin's
+  // answer comes back on <topic>-r
+  async function viaRelay() {
+    if (!relay || !rawKey || !crypto.subtle) throw new Error("这次导入没有中转")
+    const key = await cryptoKey()
+    const since = Math.floor(Date.now() / 1000) - 5
+    const r = await fetch(relay, { method: "PUT", body: await seal(key, packed), headers: { Filename: "import.txt" }, signal: AbortSignal.timeout(20000) })
+    if (!r.ok) throw new Error("中转服务返回 " + r.status)
+    say("已经交给中转，等 magpie 里的插件导入……", "")
+    const end = Date.now() + 90000
+    while (Date.now() < end) {
+      const p = await fetch(`${relay}-r/json?poll=1&since=${since}`, { cache: "no-store", signal: AbortSignal.timeout(20000) }).catch(() => null)
+      if (p && p.ok) {
+        for (const line of (await p.text()).split("\n")) {
+          let m
+          try { m = JSON.parse(line) } catch { continue }
+          if (m.event !== "message") continue
+          try { return JSON.parse(await unseal(key, m.message)) } catch {}
+        }
+      }
+      await new Promise((r) => setTimeout(r, 2000))
+    }
+    throw new Error("magpie 里的插件没有回应：导入可能已经关掉或超时")
+  }
+
+  function say(text, cls) {
+    $("status").textContent = text
+    $("status").className = cls
+    $("status").hidden = false
+  }
+
   async function finish() {
-    if (direct) return location.assign($("link").value)
     $("open").disabled = true
-    const ok = await near()
+    $("bad").hidden = true
+    // this computer: straight to the port, which says how it went
+    if (await near()) return location.assign($("link").value)
+    let why
+    try {
+      const r = await viaRelay()
+      say(r.title + "。" + r.text, r.ok ? "ok" : "err")
+      $("open").hidden = true
+      return
+    } catch (e) {
+      why = e.message || String(e)
+    }
+    $("status").hidden = true
     $("open").disabled = false
-    if (ok) return location.assign($("link").value)
-    $("far").hidden = false
-    $("hint").hidden = true
-    $("open").textContent = "仍然打开"
-    $("open").onclick = () => location.assign($("link").value)
-    $("link").focus()
-    $("link").select()
+    if ($("link").value.length > LIMIT) {
+      return fail(`没能自动交给 magpie（${why}），而选了 ${picked().length} 个账号放不进一个可粘贴的地址。请少选一些，分几次导入。`)
+    }
+    $("why").textContent = why
+    $("paste").hidden = false
+    $("open").textContent = "重试"
+    try { await navigator.clipboard.writeText($("link").value) } catch { $("link").select() }
+    $("copy").textContent = "已复制"
   }
   $("copy").onclick = async () => {
     try { await navigator.clipboard.writeText($("link").value) } catch { $("link").select(); document.execCommand("copy") }

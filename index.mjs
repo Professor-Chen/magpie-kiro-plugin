@@ -18,7 +18,7 @@
 // with back into Messages' events.
 import { createServer } from "node:http"
 import { gunzipSync } from "node:zlib"
-import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { createDecipheriv, createCipheriv, createHash, randomBytes, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { existsSync, statSync } from "node:fs"
 import { readFile, rename, writeFile } from "node:fs/promises"
@@ -45,6 +45,8 @@ const CALLBACK_PORTS = [3128, 4649, 6588, 8008, 9091, 49153, 50153, 51153, 52153
 // (KIRO_IMPORT_PAGE) puts a copy of it elsewhere
 const IMPORT_PAGE = "https://professor-chen.github.io/magpie-kiro-plugin/import.html"
 const IMPORT_MAX = 4 << 20 // the accounts' text, unpacked
+// the relay the page hands an import to when it can't reach the plugin
+const IMPORT_RELAY = "https://ntfy.sh"
 // what the IDE asks AWS for
 const SCOPES = ["codewhisperer:completions", "codewhisperer:analysis", "codewhisperer:conversations",
   "codewhisperer:transformations", "codewhisperer:taskassist"]
@@ -95,7 +97,7 @@ const SIGN_IN_TIMEOUT = 10 * 60 * 1000
 //     "off" leaves them to cacheRatio
 const DEFAULTS = { cacheRatio: 0, fingerprint: "ide", kiroVersion: "0.9.2", nodeVersion: "22.21.1", systemVersion: "",
   endpoint: "kiro", retries: 2, thinkingMin: 1024, thinkingMax: 64000, budgets: "", adaptive: false, effortField: "auto",
-  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", importPage: "", importListen: "", importCallback: "" }
+  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", importPage: "", importRelay: "" }
 const cfg = { ...DEFAULTS }
 // BUDGETS are each effort's thinking budget (xhigh its own level: #120)
 const BASE_BUDGETS = { low: 10000, medium: 20000, high: 30000, xhigh: 50000, max: 64000 }
@@ -122,11 +124,10 @@ function configure(o = {}) {
   cfg.meter = String(pick("meter", "KIRO_METER")).toLowerCase() === "off" ? "off" : "on"
   const ip = String(pick("importPage", "KIRO_IMPORT_PAGE"))
   cfg.importPage = /^https?:\/\//i.test(ip) ? ip : IMPORT_PAGE
-  // magpie in Docker: the import port is published (host:port it listens
-  // on), and the browser is sent to it straight (importCallback, else
-  // MAGPIE_PUBLIC_URL's host and that port)
-  cfg.importListen = String(pick("importListen", "KIRO_IMPORT_LISTEN")).trim()
-  cfg.importCallback = String(pick("importCallback", "KIRO_IMPORT_CALLBACK")).trim().replace(/\/+$/, "")
+  // where the import page hands the accounts over when its browser can't
+  // reach the plugin's port: an ntfy server, or "off"
+  const relay = String(pick("importRelay", "KIRO_IMPORT_RELAY")).trim().replace(/\/+$/, "")
+  cfg.importRelay = /^off$/i.test(relay) ? "" : /^https?:\/\//i.test(relay) ? relay : IMPORT_RELAY
   Object.assign(BUDGETS, BASE_BUDGETS)
   const b = pick("budgets", "KIRO_BUDGETS")
   const pairs = b && typeof b === "object" ? Object.entries(b) : String(b ?? "").split(",").map((s) => s.split("="))
@@ -2220,13 +2221,15 @@ async function ownSignIn() {
 // on the web the plugin runs on another computer than the browser, so a
 // file can only be chosen in a page of the browser's own. 选择文件… opens
 // import.html (importPage): it reads the files there, one or several, and
-// sends the browser back to a port of the plugin's (redirect_uri), the
-// accounts ticked in the address. That port is on 127.0.0.1, which a
-// browser on another computer can't reach; magpie then takes the address
-// pasted under the sign-in and opens it on its own computer (a plugin's
-// pasted callback, by the port redirect_uri names). In Docker the port can
-// be published instead (importListen, importCallback), and the browser
-// goes to it straight.
+// hands the accounts ticked to the plugin the first way that works:
+//   - its port on 127.0.0.1 (redirect_uri), when the browser is on the
+//     plugin's computer: magpie's window, or its page opened there
+//   - a relay (importRelay, ntfy.sh): the page publishes them, sealed
+//     with AES-GCM under a key that is only in the link's #fragment, to a
+//     topic named at random for this import, and the plugin, subscribed,
+//     takes them. The relay sees neither the key nor the accounts.
+//   - the address pasted under the sign-in, which magpie opens on its own
+//     computer (a plugin's pasted callback, by the port redirect_uri names)
 
 // importPacked is the account the page put in its address: "g" and gzip,
 // or "j" and the text, base64url either way
@@ -2238,63 +2241,133 @@ function importPacked(d) {
   throw new Error("the address holds no account")
 }
 
-// importWhere is where the import port listens, and the address the
-// browser is sent back to
-function importWhere() {
-  const m = /^(?:(\[[^\]]+\]|[^:]+):)?(\d{1,5})$/.exec(cfg.importListen)
-  if (!m) return { host: "127.0.0.1", port: 0, back: (port) => `http://127.0.0.1:${port}/import` }
-  const host = (m[1] || "0.0.0.0").replace(/^\[|\]$/g, "")
-  const port = Number(m[2])
-  const back = (at = port) => {
-    if (cfg.importCallback) return cfg.importCallback + "/import"
-    try {
-      return `http://${new URL(process.env.MAGPIE_PUBLIC_URL || "").hostname}:${at}/import`
-    } catch {
-      return `http://127.0.0.1:${at}/import`
-    }
-  }
-  return { host, port, back }
+// seal and unseal are the relay's: base64url of iv (12 bytes) and the
+// AES-256-GCM ciphertext with its tag, as WebCrypto gives it
+function seal(key, text) {
+  const iv = randomBytes(12)
+  const c = createCipheriv("aes-256-gcm", key, iv)
+  const body = Buffer.concat([c.update(text, "utf8"), c.final(), c.getAuthTag()])
+  return iv.toString("base64url") + "." + body.toString("base64url")
+}
+function unseal(key, sealed) {
+  const [iv, body] = String(sealed ?? "").trim().split(".")
+  const b = Buffer.from(body ?? "", "base64url")
+  if (!iv || b.length < 17) throw new Error("not sealed")
+  const d = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64url"))
+  d.setAuthTag(b.subarray(b.length - 16))
+  return Buffer.concat([d.update(b.subarray(0, b.length - 16)), d.final()]).toString("utf8")
 }
 
-// pageSignIn waits on its own port for the address import.html sends the
-// browser to. The first account that signs in is this sign-in's; the
-// others ticked are kept beside it as accounts of their own (client.auth.set
-// under kiro-custom#…, by their name, so importing one again replaces it).
+// relayed waits on an ntfy topic for the first message sealed with key,
+// subscribed for as long as signal lets it (reconnecting when the stream
+// drops), and gives its text. A message too big for one is an attachment.
+async function relayed(base, topic, key, signal) {
+  let since = "all"
+  while (!signal.aborted) {
+    try {
+      const res = await fetch(`${base}/${topic}/json?since=${since}`, { signal, headers: { Accept: "application/x-ndjson" } })
+      if (!res.ok || !res.body) throw new Error(`the relay answered ${res.status}`)
+      const lines = res.body.pipeThrough(new TextDecoderStream())
+      let buf = ""
+      for await (const chunk of lines) {
+        buf += chunk
+        let nl
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl)
+          buf = buf.slice(nl + 1)
+          let m
+          try {
+            m = JSON.parse(line)
+          } catch {
+            continue
+          }
+          if (m.event !== "message") continue
+          since = m.id
+          try {
+            const sealed = m.attachment?.url
+              ? await (await fetch(m.attachment.url, { signal })).text()
+              : m.message
+            return unseal(key, sealed)
+          } catch {
+            // someone else's message on the topic, or a broken one
+          }
+        }
+      }
+    } catch (e) {
+      if (signal.aborted) break
+    }
+    await new Promise((r) => setTimeout(r, 3000))
+  }
+  throw new Error("aborted")
+}
+
+// pageSignIn waits for the accounts import.html hands over: at its own
+// port on 127.0.0.1, or through the relay. The first account that signs
+// in is this sign-in's; the others ticked are kept beside it as accounts
+// of their own (client.auth.set under kiro-custom#…, by their name, so
+// importing one again replaces it).
 async function pageSignIn(client) {
-  const where = importWhere()
   const server = createServer({ maxHeaderSize: 1 << 20 })
   await new Promise((resolve, reject) => {
-    server.once("error", (e) => reject(e.code === "EADDRINUSE" ? new Error(`导入端口 ${where.port} 被占用：另一次导入还开着，关掉它再试`) : e))
-    server.listen(where.port, where.host, resolve)
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", resolve)
   })
   const state = randomBytes(24).toString("base64url")
   const link = new URL(cfg.importPage)
-  link.searchParams.set("redirect_uri", where.back(server.address().port))
+  link.searchParams.set("redirect_uri", `http://127.0.0.1:${server.address().port}/import`)
   link.searchParams.set("state", state)
-  // a published port: the page sends the browser there without asking
-  // (an https page can't fetch an http address that isn't this computer's)
-  if (cfg.importListen) link.searchParams.set("direct", "1")
+  const stop = new AbortController()
+  const key = randomBytes(32)
+  const topic = "kiro-" + randomBytes(18).toString("base64url")
+  // the key goes in the fragment, which the browser never sends anywhere
+  if (cfg.importRelay) link.hash = new URLSearchParams({ relay: `${cfg.importRelay}/${topic}`, k: key.toString("base64url") }).toString()
   let settle
   const got = new Promise((r) => (settle = r))
   let busy = false
-  // magpie gives a sign-in ten minutes; the port goes with it
+  // one import, from whichever way comes first
+  const take = async (text) => {
+    if (busy) return null
+    busy = true
+    const r = await importAll(client, text)
+    settle(r)
+    return r
+  }
+  // magpie gives a sign-in ten minutes; the port and the topic go with it
   const timer = setTimeout(() => settle({ type: "failed", error: "没有收到账号，导入已超时；重新开始导入" }), 11 * 60_000)
+  const said = (r) => (r.type === "success"
+    ? { ok: true, title: `导入了 ${r.count} 个账号`, text: (r.notes.length ? r.notes.join("；") + "。" : "") + "可以关掉这个页面，回到 magpie。" }
+    : { ok: false, title: "没有导入账号", text: r.error })
+  if (cfg.importRelay) {
+    relayed(cfg.importRelay, topic, key, stop.signal).then(async (packed) => {
+      let text
+      try {
+        text = importPacked(packed)
+        JSON.parse(text)
+      } catch {
+        return
+      }
+      const r = await take(text)
+      // the page waits on the reply topic to say how it went
+      if (r) await fetch(`${cfg.importRelay}/${topic}-r`, { method: "POST", body: seal(key, JSON.stringify(said(r))), signal: AbortSignal.timeout(15_000) }).catch(() => {})
+    }, () => {})
+  }
   server.on("request", async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1")
     const html = (ok, title, text) => {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" })
+      // the port closes after the import: no connection is kept to it
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", Connection: "close" })
       res.end(page(ok, title, text))
     }
     // the page asks first whether it can reach this port (a browser on
     // another computer can't), as a public page asking a local one
     if (url.pathname === "/ping") {
       res.writeHead(req.method === "OPTIONS" ? 204 : 200, { "Access-Control-Allow-Origin": link.origin,
-        "Access-Control-Allow-Private-Network": "true", "Access-Control-Allow-Methods": "GET", "Cache-Control": "no-store" })
+        "Access-Control-Allow-Private-Network": "true", "Access-Control-Allow-Methods": "GET", "Cache-Control": "no-store", Connection: "close" })
       return res.end()
     }
     if (url.pathname !== "/import") return res.writeHead(404).end()
     if (url.searchParams.get("state") !== state) return html(false, "这个地址不是这次导入的", "在 magpie 里重新开始导入。")
-    if (busy) return html(false, "正在导入", "这个地址已经收到了，回到 magpie 看结果。")
+    if (busy) return html(false, "正在导入", "这次导入已经收到了账号，回到 magpie 看结果。")
     let text
     try {
       text = importPacked(url.searchParams.get("d"))
@@ -2302,20 +2375,20 @@ async function pageSignIn(client) {
     } catch (e) {
       return html(false, "地址里没有完整的账号", "重新在导入页里选择文件，并复制完整的地址。")
     }
-    busy = true
-    const r = await importAll(client, text)
-    if (r.type === "success") html(true, `导入了 ${r.count} 个账号`, (r.notes.length ? r.notes.join("；") + "。" : "") + "可以关掉这个页面，回到 magpie。")
-    else html(false, "没有导入账号", r.error)
-    settle(r)
+    const r = await take(text)
+    const { ok, title, text: why } = said(r)
+    html(ok, title, why)
   })
   return {
     url: link.href,
-    instructions: "magpie 打开了导入页：在页面里选择导出的 JSON 文件（可以多选），勾选账号，再点「完成导入」。如果之后的页面打不开（magpie 在服务器或 Docker 上），把它的完整地址粘贴到下面。",
+    instructions: "magpie 打开了导入页：在页面里选择导出的 JSON 文件（可以多选），勾选账号，再点「完成导入」。导入页会自己把账号交给插件；交不过来时，它会给出一个地址，粘贴到下面。",
     method: "auto",
     callback: async () => {
       const r = await got
       clearTimeout(timer)
+      stop.abort()
       server.close()
+      server.closeIdleConnections?.()
       if (r.type !== "success") return r
       const { count: _c, notes: _n, ...result } = r
       return result
@@ -2553,6 +2626,6 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
 
 // for tests
 export const _internal = { generate, refresh, usageOf, buildKiro, events, reply, failure, toolID, toolName, toolNames, thinking, configModel, runtimeModel, readCLI, readIDE, regionOf, planName, frames,
-  importedAccounts, expiresOf, machineIdOf, normalizeMachineId, kiroHeaders, chatURL, configure, cfg, withCache, estimateInput, jsonSignIn, importSource, importPacked, pageSignIn, importAll, importWhere,
+  importedAccounts, expiresOf, machineIdOf, normalizeMachineId, kiroHeaders, chatURL, configure, cfg, withCache, estimateInput, jsonSignIn, importSource, importPacked, pageSignIn, importAll, seal, unseal,
   thinkingPrefix, effortField, BUDGETS, TextCalls, realClose, refreshUA, SUSPENDED, meter, PRICES, learned, turns, charsOf, windowsOf: () => windows,
   setPing: (ms) => (PING_MS = ms) }

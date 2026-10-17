@@ -130,41 +130,32 @@ The import page ([`import.html`](import.html), served by GitHub Pages at
 `https://professor-chen.github.io/magpie-kiro-plugin/import.html`; the
 `importPage` option or `KIRO_IMPORT_PAGE` names another copy) reads the
 files in the browser, several at once, and lists their accounts to tick
-(the active ones are ticked). It sends the browser back to a port the
-plugin opened for this import, the ticked accounts gzip'd in the address,
-and nothing goes anywhere else. Each account is checked with a refresh;
+(the active ones are ticked), without what the plugin doesn't keep (an
+export's passwords and notes). Each account is checked with a refresh;
 the first is this sign-in's, and each other is kept as an account of its
 own (`kiro-custom#…`, by its name, so importing it again replaces it).
 The page says which were skipped or failed, and why.
 
-That port is on `127.0.0.1`. From another computer, or with magpie in
-Docker, the browser can't reach it: copy the address the page shows into
-the address box magpie shows under the sign-in, and magpie opens it on
-its own computer, as for Kiro's browser sign-in. Such an address holds
-about a dozen accounts at most (magpie takes 16 KB).
+The page hands the accounts over the first way that works, so it is the
+same in magpie's window, on its web page, and with magpie in Docker or on
+a server:
 
-In Docker the port can be published instead, and the browser goes there
-straight, with no address to paste and no such limit. Set `importListen`
-(`KIRO_IMPORT_LISTEN`) to the port, `host:port` to listen on one address
-(the whole container's by default), publish it, and give the address the
-browser reaches it at with `importCallback` (`KIRO_IMPORT_CALLBACK`, as
-`http://host:port`), else `MAGPIE_PUBLIC_URL`'s host and the same port:
-
-```yaml
-services:
-  magpie:
-    environment:
-      KIRO_IMPORT_LISTEN: "3427"
-      KIRO_IMPORT_CALLBACK: http://nas.lan:3427
-    ports:
-      - "3427:3427"
-```
-
-One import at a time then, as it has one port. The port is open only
-while an import waits (ten minutes at most), and only an address with
-this import's random `state` is taken, but it is plain HTTP: publish it
-on your own network, not to the internet. The page says where it sends
-the accounts when that isn't this computer.
+1. The plugin's port on `127.0.0.1`, when the browser is on magpie's
+   computer.
+2. A relay, [ntfy.sh](https://ntfy.sh) by default: the page seals the
+   accounts with AES-256-GCM under a key made for this import and kept
+   only in the link's `#fragment`, which a browser never sends, and
+   publishes them to a topic named at random for it. The plugin,
+   subscribed to it while the import waits, opens them and answers on
+   the same topic with `-r`, so the page says how it went. ntfy.sh sees
+   only the sealed text, and drops it within hours. `importRelay`
+   (`KIRO_IMPORT_RELAY`) names another ntfy server, such as your own, or
+   `off`.
+3. If neither works (the relay can't be reached from magpie or the
+   browser), the page copies an address to the clipboard: paste it into
+   the address box magpie shows under the sign-in, and magpie opens it
+   on its own computer, as for Kiro's browser sign-in. Such an address
+   holds about a dozen accounts at most (magpie takes 16 KB).
 
 Accepted exports:
 
@@ -206,8 +197,7 @@ Set as the plugin's options in magpie's `plugins.json`
 | `toolDescriptionLimit` | `KIRO_TOOL_DESCRIPTION_LIMIT` | `9216` | A tool's description is cut at this. |
 | `meter` | `KIRO_METER` | `on` | `on`: the usage's cache tokens, and a native thinker's unshown reasoning, are read from what Kiro metered (below); `off`: `cacheRatio` stands in. |
 | `importPage` | `KIRO_IMPORT_PAGE` | GitHub Pages | The import page 选择文件… opens: a copy of `import.html` served elsewhere (http or https). |
-| `importListen` | `KIRO_IMPORT_LISTEN` | (none) | Docker: the import page's port, `port` or `host:port`, published so the browser goes to it straight. |
-| `importCallback` | `KIRO_IMPORT_CALLBACK` | `MAGPIE_PUBLIC_URL`'s host | Where the browser reaches `importListen`'s port, as `http://host:port`. |
+| `importRelay` | `KIRO_IMPORT_RELAY` | `https://ntfy.sh` | The ntfy server the import page hands sealed accounts to when its browser is on another computer; `off` for none. |
 
 ### Usage, read from what Kiro metered (this fork)
 
