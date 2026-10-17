@@ -2358,12 +2358,31 @@ async function pageSignIn(client) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", Connection: "close" })
       res.end(page(ok, title, text))
     }
-    // the page asks first whether it can reach this port (a browser on
-    // another computer can't), as a public page asking a local one
-    if (url.pathname === "/ping") {
-      res.writeHead(req.method === "OPTIONS" ? 204 : 200, { "Access-Control-Allow-Origin": link.origin,
-        "Access-Control-Allow-Private-Network": "true", "Access-Control-Allow-Methods": "GET", "Cache-Control": "no-store", Connection: "close" })
-      return res.end()
+    // the page asks this port straight, from its own origin: a public page
+    // asking one on this computer (Chrome's private network preflight)
+    const cors = { "Access-Control-Allow-Origin": link.origin, "Access-Control-Allow-Private-Network": "true",
+      "Access-Control-Allow-Methods": "GET, POST", "Access-Control-Allow-Headers": "Content-Type", "Cache-Control": "no-store", Connection: "close" }
+    if (req.method === "OPTIONS") return res.writeHead(204, cors).end()
+    // whether the page reaches this port (a browser on another computer can't)
+    if (url.pathname === "/ping") return res.writeHead(200, cors).end()
+    // the page posts the accounts and stays, to say how it went and close
+    if (url.pathname === "/import" && req.method === "POST") {
+      const json = (code, o) => res.writeHead(code, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(o))
+      if (url.searchParams.get("state") !== state) return json(403, { ok: false, title: "这不是这次导入", text: "在 magpie 里重新开始导入。" })
+      if (busy) return json(409, { ok: false, title: "正在导入", text: "这次导入已经收到了账号，回到 magpie 看结果。" })
+      let body = ""
+      for await (const chunk of req) {
+        body += chunk
+        if (body.length > 8 << 20) return json(413, { ok: false, title: "数据太大", text: "少选一些账号，分几次导入。" })
+      }
+      let text
+      try {
+        text = importPacked(body.trim())
+        JSON.parse(text)
+      } catch {
+        return json(400, { ok: false, title: "没有收到完整的账号", text: "重新选择文件再试。" })
+      }
+      return json(200, said(await take(text)))
     }
     if (url.pathname !== "/import") return res.writeHead(404).end()
     if (url.searchParams.get("state") !== state) return html(false, "这个地址不是这次导入的", "在 magpie 里重新开始导入。")

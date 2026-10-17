@@ -2,9 +2,10 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
-<title>导入 Kiro 账号</title>
+<meta name="color-scheme" content="light dark">
+<title>Kiro 账号导入</title>
 <!--
   The kiro-custom plugin's file chooser, for magpie in a window or on the
   web. The files are read here, in the browser. The accounts ticked go to
@@ -12,69 +13,184 @@
   sealed (AES-GCM, the key only in this page's #fragment) through the
   relay the sign-in named, else as an address to paste into magpie.
 -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
-:root{--bg:#fafafa;--fg:#222;--muted:#666;--card:#fff;--line:#ddd;--accent:#2563eb;--bad:#c0392b;--ok:#2a9d5c}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161616;--fg:#eee;--muted:#aaa;--card:#202020;--line:#3a3a3a;--accent:#60a5fa;--bad:#ef6b5b;--ok:#4cc38a}}
-:root[data-theme="dark"]{--bg:#161616;--fg:#eee;--muted:#aaa;--card:#202020;--line:#3a3a3a;--accent:#60a5fa;--bad:#ef6b5b;--ok:#4cc38a}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
-main{max-width:36rem;margin:0 auto;padding:2rem 16px}
-h1{font-size:1.3rem;margin:0 0 .5rem}
-p{margin:.4rem 0}
-.muted{color:var(--muted);font-size:.9rem}
-.drop{display:block;margin:1rem 0;padding:1.6rem 1rem;border:2px dashed var(--line);border-radius:10px;background:var(--card);text-align:center;cursor:pointer}
-.drop.over{border-color:var(--accent)}
-.drop input{display:block;margin:.6rem auto 0;max-width:100%}
-fieldset{border:1px solid var(--line);border-radius:10px;background:var(--card);margin:1rem 0;padding:.6rem 1rem}
-legend{padding:0 .3rem}
-label.acct{display:flex;gap:.5rem;align-items:baseline;padding:.25rem 0;cursor:pointer;overflow-wrap:anywhere}
-label.acct .from{color:var(--muted);font-size:.85rem}
-.tools{display:flex;gap:1rem;font-size:.9rem;margin:.2rem 0 .4rem}
-.tools button{padding:0;border:0;background:none;color:var(--accent);cursor:pointer}
-.err{color:var(--bad)}
-.ok{color:var(--ok)}
-.row{display:flex;gap:.5rem;margin:.6rem 0}
-.row input{flex:1;min-width:0;padding:.45rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);font:13px ui-monospace,monospace}
-button.main,button.ghost{padding:.45rem 1rem;border:1px solid var(--accent);border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
-button.ghost{background:transparent;color:var(--accent)}
-button:disabled{opacity:.5;cursor:default}
-button:focus-visible,input:focus-visible,.drop:focus-within{outline:2px solid var(--accent);outline-offset:2px}
-code{overflow-wrap:anywhere}
-[hidden]{display:none!important}
+/* one column, a ticket: the drop zone, the accounts as a list, one action */
+:root {
+  --bg: #f3f4f1;
+  --panel: #ffffff;
+  --ink: #17201b;
+  --muted: #5f6b64;
+  --line: #dde2dc;
+  --accent: #6d4aff;
+  --accent-ink: #ffffff;
+  --accent-soft: #ece7ff;
+  --ok: #18794e;
+  --ok-soft: #e3f4ea;
+  --bad: #c4342d;
+  --bad-soft: #fbe9e7;
+  --font-display: "Bricolage Grotesque", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-body: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --radius: 14px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1311; --panel: #171c19; --ink: #e8ece9; --muted: #96a29b; --line: #29312c;
+    --accent: #9b85ff; --accent-ink: #120c2b; --accent-soft: #241d45;
+    --ok: #4cc38a; --ok-soft: #13291e; --bad: #ff7b72; --bad-soft: #321615;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1311; --panel: #171c19; --ink: #e8ece9; --muted: #96a29b; --line: #29312c;
+  --accent: #9b85ff; --accent-ink: #120c2b; --accent-soft: #241d45;
+  --ok: #4cc38a; --ok-soft: #13291e; --bad: #ff7b72; --bad-soft: #321615;
+  color-scheme: dark;
+}
+* { box-sizing: border-box }
+html, body { min-height: 100% }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.65 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: clamp(24px, 6vh, 64px);
+}
+main { max-width: 34rem; margin: 0 auto; display: grid; gap: 18px }
+header { display: grid; gap: 8px }
+.mark {
+  display: inline-flex; align-items: center; gap: 8px; width: fit-content;
+  font: 500 12px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.mark i { width: 8px; height: 8px; border-radius: 2px; background: var(--accent); transform: rotate(45deg) }
+h1 { margin: 0; font: 700 clamp(28px, 6vw, 36px)/1.15 var(--font-display); letter-spacing: -.01em; text-wrap: balance }
+.lede { margin: 0; color: var(--muted); max-width: 60ch }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius) }
+
+.drop {
+  display: grid; place-items: center; gap: 6px; text-align: center; cursor: pointer;
+  padding: 34px 18px; border: 1.5px dashed var(--line); border-radius: var(--radius); background: var(--panel);
+  transition: border-color .15s, background .15s;
+}
+.drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft) }
+.drop:focus-within { outline: 2px solid var(--accent); outline-offset: 3px }
+.drop .glyph { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent) }
+.drop strong { font: 600 16px/1.3 var(--font-display) }
+.drop small { color: var(--muted); font-size: 13px }
+.drop input { position: absolute; width: 1px; height: 1px; opacity: 0 }
+.formats { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 6px }
+.formats span { font: 12px/1 var(--font-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px }
+
+.accounts { padding: 6px 0 }
+.accounts-head { display: flex; align-items: center; gap: 12px; padding: 10px 16px 8px; border-bottom: 1px solid var(--line) }
+.accounts-head h2 { margin: 0; font: 600 15px/1.3 var(--font-display); flex: 1 }
+.accounts-head .count { font: 500 12px/1 var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums }
+.link-btn { border: 0; background: none; padding: 4px 2px; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; border-radius: 4px }
+#accts { list-style: none; margin: 0; padding: 4px 0; max-height: 46vh; overflow-y: auto }
+label.acct {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center;
+  padding: 10px 16px; cursor: pointer;
+}
+label.acct:hover { background: var(--accent-soft) }
+label.acct input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0 }
+.acct .who { min-width: 0; overflow-wrap: anywhere; font-weight: 500 }
+.acct .from { grid-column: 2; color: var(--muted); font: 12px/1.4 var(--font-mono); overflow-wrap: anywhere }
+.chip { grid-row: 1; grid-column: 3; font: 500 11px/1 var(--font-mono); padding: 4px 8px; border-radius: 999px; background: var(--bg); color: var(--muted); border: 1px solid var(--line) }
+.chip.off { color: var(--bad); background: var(--bad-soft); border-color: transparent }
+
+.actions { display: grid; gap: 12px }
+#ready { margin: 0; color: var(--muted); font-size: 14px }
+.primary {
+  justify-self: start; display: inline-flex; align-items: center; gap: 10px;
+  padding: 12px 22px; border: 0; border-radius: 999px; background: var(--accent); color: var(--accent-ink);
+  font: 600 15px/1 var(--font-display); cursor: pointer; transition: transform .12s, opacity .12s;
+}
+.primary:hover:not(:disabled) { transform: translateY(-1px) }
+.primary:disabled { opacity: .6; cursor: progress }
+.primary .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite }
+@keyframes spin { to { transform: rotate(360deg) } }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+
+.note { margin: 0; padding: 12px 14px; border-radius: 10px; font-size: 14px }
+.note.err { background: var(--bad-soft); color: var(--bad) }
+.note.ok { background: var(--ok-soft); color: var(--ok) }
+.note.wait { background: var(--accent-soft); color: var(--ink) }
+#paste { display: grid; gap: 10px }
+.copy-row { display: flex; gap: 8px }
+.copy-row input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); font: 12px var(--font-mono) }
+.ghost { padding: 10px 16px; border: 1px solid var(--accent); border-radius: 10px; background: transparent; color: var(--accent); font: 600 14px/1 var(--font-body); cursor: pointer; white-space: nowrap }
+
+.done { display: grid; justify-items: center; gap: 10px; text-align: center; padding: 40px 20px }
+.done .tick { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok) }
+.done .tick.bad { background: var(--bad-soft); color: var(--bad) }
+.done h2 { margin: 0; font: 700 24px/1.2 var(--font-display); text-wrap: balance }
+.done p { margin: 0; color: var(--muted); max-width: 46ch }
+.done .later { font: 12px/1.4 var(--font-mono); color: var(--muted) }
+
+footer { color: var(--muted); font-size: 12.5px; display: flex; gap: 8px; align-items: flex-start }
+footer svg { flex: none; margin-top: 2px }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important } }
+[hidden] { display: none !important }
 </style>
 </head>
 <body>
 <main>
-  <h1>导入导出的 Kiro 账号</h1>
-  <p class="muted">支持 Kiro Account Manager、Cockpit、kiro.rs 的 credentials.json，以及 Kiro IDE 的 kiro-auth-token.json，可以一次选多个文件。文件只在这个浏览器里读取。magpie 不在这台电脑上时，账号先加密，再经公共中转 ntfy.sh 交给插件；密钥只在这个页面的链接里，中转看不到内容。</p>
+  <header>
+    <span class="mark"><i></i>magpie · kiro-custom</span>
+    <h1>导入 Kiro 账号</h1>
+    <p class="lede">选择导出的 JSON 文件，勾选要导入的账号，magpie 会逐个校验后保存。</p>
+  </header>
 
-  <p id="bad" class="err" role="alert" hidden></p>
+  <p id="bad" class="note err" role="alert" hidden></p>
 
-  <div id="pick">
+  <section id="pick">
     <label class="drop" id="drop">
-      <span>点这里选择 JSON 文件（可多选），或把文件拖进来</span>
+      <span class="glyph" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"/></svg></span>
+      <strong>选择文件，或拖到这里</strong>
+      <small>可以一次选多个 .json 文件</small>
+      <span class="formats" aria-label="支持的格式"><span>Kiro Account Manager</span><span>Cockpit</span><span>kiro.rs</span><span>kiro-auth-token.json</span></span>
       <input id="file" type="file" accept=".json,application/json" multiple>
     </label>
-  </div>
+  </section>
 
-  <fieldset id="which" hidden>
-    <legend>要导入的账号</legend>
-    <div class="tools"><button id="all" type="button">全选</button><button id="none" type="button">全不选</button></div>
+  <section id="which" class="panel accounts" hidden>
+    <div class="accounts-head">
+      <h2>要导入的账号</h2>
+      <span class="count" id="count"></span>
+      <button id="all" class="link-btn" type="button">全选</button>
+      <button id="none" class="link-btn" type="button">全不选</button>
+    </div>
     <div id="accts"></div>
-  </fieldset>
+  </section>
 
-  <div id="go" hidden>
-    <p class="ok" id="ready" aria-live="polite"></p>
-    <p id="status" aria-live="polite" hidden></p>
-    <div class="row"><button id="open" class="main" type="button">完成导入</button></div>
+  <section id="go" class="actions" hidden>
+    <p id="ready" aria-live="polite"></p>
+    <p id="status" class="note" aria-live="polite" hidden></p>
+    <button id="open" class="primary" type="button">完成导入</button>
     <div id="paste" hidden>
-      <p class="err" id="far">没能自动交给 magpie（<span id="why"></span>）。地址已经复制好了：回到 magpie，粘贴到登录框下面的地址框里，再点「Finish sign-in」。如果 magpie 里的导入已经关掉或超时，请重新开始导入。</p>
-      <div class="row">
+      <p class="note err" id="far">没能自动交给 magpie（<span id="why"></span>）。地址已经复制好了：回到 magpie，粘贴到登录框下面的地址框，再点「Finish sign-in」。如果 magpie 里的导入已经关掉或超时，请重新开始导入。</p>
+      <div class="copy-row">
         <input id="link" readonly aria-label="导入地址">
         <button id="copy" type="button" class="ghost">复制</button>
       </div>
     </div>
-  </div>
+  </section>
+
+  <section id="done" class="panel done" hidden aria-live="polite">
+    <span class="tick" id="tick" aria-hidden="true"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>
+    <h2 id="doneTitle"></h2>
+    <p id="doneText"></p>
+    <span class="later" id="later"></span>
+  </section>
+
+  <footer>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+    <span>文件只在这个浏览器里读取。magpie 不在这台电脑上时，账号先加密，再经公共中转 ntfy.sh 交给插件；密钥只在这个页面的链接里，中转看不到内容。</span>
+  </footer>
 </main>
 <script>
 (() => {
@@ -141,6 +257,7 @@ code{overflow-wrap:anywhere}
   async function ready() {
     const list = picked()
     $("bad").hidden = true
+    $("count").textContent = `${list.length} / ${items.length}`
     if (!list.length) {
       $("go").hidden = true
       return
@@ -150,12 +267,11 @@ code{overflow-wrap:anywhere}
     url.searchParams.set("state", state)
     url.searchParams.set("d", packed)
     $("link").value = url.href
-    $("ready").textContent = `已选 ${list.length} 个账号。点「完成导入」。`
+    $("ready").textContent = `已选 ${list.length} 个，共 ${items.length} 个账号。`
+    $("count").textContent = `${list.length} / ${items.length}`
     $("paste").hidden = true
     $("status").hidden = true
-    $("open").textContent = "完成导入"
-    $("open").hidden = false
-    $("open").disabled = false
+    busy(false)
     $("open").onclick = finish
     $("go").hidden = false
   }
@@ -164,6 +280,7 @@ code{overflow-wrap:anywhere}
     $("bad").hidden = true
     $("go").hidden = true
     const bad = []
+    const seen = new Set(items.map((it) => JSON.stringify(it.acct)))
     for (const f of files) {
       let data
       try {
@@ -174,7 +291,11 @@ code{overflow-wrap:anywhere}
       }
       const list = accountsIn(data)
       if (!list.length) bad.push(f.name + "：没有账号")
-      list.forEach((acct) => items.push({ acct, from: f.name }))
+      // the same file twice adds nothing
+      for (const acct of list) {
+        const k = JSON.stringify(acct)
+        if (!seen.has(k)) { seen.add(k); items.push({ acct, from: f.name }) }
+      }
     }
     draw()
     if (bad.length) fail(bad.join("；"))
@@ -192,12 +313,16 @@ code{overflow-wrap:anywhere}
       r.checked = usable(it.acct)
       r.onchange = ready
       const c = (it.acct && (it.acct.credentials || it.acct.auth)) || it.acct || {}
-      const text = document.createElement("span")
-      text.textContent = nameOf(it.acct, i) + (c.provider ? "（" + c.provider + "）" : "") + (usable(it.acct) ? "" : " · " + statusOf(it.acct))
+      const who = document.createElement("span")
+      who.className = "who"
+      who.textContent = nameOf(it.acct, i)
+      const chip = document.createElement("span")
+      chip.className = "chip" + (usable(it.acct) ? "" : " off")
+      chip.textContent = usable(it.acct) ? (c.provider || (c.authMethod === "idc" || c.clientId ? "IdC" : "Social")) : statusOf(it.acct)
       const from = document.createElement("span")
       from.className = "from"
       from.textContent = it.from
-      l.append(r, text, from)
+      l.append(r, who, chip, from)
       box.append(l)
     })
     $("which").hidden = !items.length
@@ -228,6 +353,13 @@ code{overflow-wrap:anywhere}
       return false
     }
   }
+  // the accounts posted to the port, which answers how it went
+  async function viaPort() {
+    const url = new URL(back.href)
+    url.searchParams.set("state", state)
+    const r = await fetch(url.href, { method: "POST", body: packed, headers: { "Content-Type": "text/plain" }, signal: AbortSignal.timeout(120000) })
+    return r.json()
+  }
 
   const unb64 = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0))
   async function cryptoKey() {
@@ -251,7 +383,7 @@ code{overflow-wrap:anywhere}
     const since = Math.floor(Date.now() / 1000) - 5
     const r = await fetch(relay, { method: "PUT", body: await seal(key, packed), headers: { Filename: "import.txt" }, signal: AbortSignal.timeout(20000) })
     if (!r.ok) throw new Error("中转服务返回 " + r.status)
-    say("已经交给中转，等 magpie 里的插件导入……", "")
+    say("已加密交给中转，等 magpie 里的插件导入…", "wait")
     const end = Date.now() + 90000
     while (Date.now() < end) {
       const p = await fetch(`${relay}-r/json?poll=1&since=${since}`, { cache: "no-store", signal: AbortSignal.timeout(20000) }).catch(() => null)
@@ -270,26 +402,65 @@ code{overflow-wrap:anywhere}
 
   function say(text, cls) {
     $("status").textContent = text
-    $("status").className = cls
+    $("status").className = "note " + (cls || "wait")
     $("status").hidden = false
+  }
+  function busy(on) {
+    const b = $("open")
+    b.disabled = on
+    b.textContent = on ? "" : "完成导入"
+    if (on) {
+      const sp = document.createElement("span")
+      sp.className = "spin"
+      b.append(sp, "正在导入…")
+    }
+  }
+
+  // the result, in place of the form; a success closes the page after a
+  // moment, where the browser lets it (a page magpie opened, not one the
+  // person opened by hand: then it says so instead)
+  function done(r) {
+    for (const id of ["pick", "which", "go", "bad"]) $(id).hidden = true
+    $("tick").classList.toggle("bad", !r.ok)
+    if (!r.ok) $("tick").innerHTML = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg>'
+    $("doneTitle").textContent = r.title
+    $("doneText").textContent = r.text
+    $("done").hidden = false
+    if (!r.ok) return
+    let n = 3
+    const tick = () => {
+      if (n > 0) {
+        $("later").textContent = `${n} 秒后关闭这个页面`
+        n--
+        return setTimeout(tick, 1000)
+      }
+      window.close()
+      // still here: the browser keeps a page it didn't open from script
+      setTimeout(() => { $("later").textContent = "可以关掉这个页面了" }, 300)
+    }
+    tick()
   }
 
   async function finish() {
-    $("open").disabled = true
+    busy(true)
     $("bad").hidden = true
-    // this computer: straight to the port, which says how it went
-    if (await near()) return location.assign($("link").value)
+    $("paste").hidden = true
     let why
+    // this computer: straight to the port
+    if (await near()) {
+      try {
+        return done(await viaPort())
+      } catch (e) {
+        why = "插件没有回应"
+      }
+    }
     try {
-      const r = await viaRelay()
-      say(r.title + "。" + r.text, r.ok ? "ok" : "err")
-      $("open").hidden = true
-      return
+      return done(await viaRelay())
     } catch (e) {
       why = e.message || String(e)
     }
     $("status").hidden = true
-    $("open").disabled = false
+    busy(false)
     if ($("link").value.length > LIMIT) {
       return fail(`没能自动交给 magpie（${why}），而选了 ${picked().length} 个账号放不进一个可粘贴的地址。请少选一些，分几次导入。`)
     }
