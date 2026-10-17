@@ -181,7 +181,7 @@ test("the JSON sign-in asks for the JSON, then which account only when there are
   const hooks = await KiroAuthPlugin({ client: {} }, {})
   const m = hooks.auth.methods.find((x) => /JSON/.test(x.label))
   const q1 = await m.ask({})
-  expect(q1).toMatchObject({ key: "json", type: "password" })
+  expect(q1).toMatchObject({ key: "json", type: "file" })
   const one = JSON.stringify({ accounts: [{ email: "a@x", credentials: { refreshToken: "r", authMethod: "social" } }] })
   expect(await m.ask({ json: one })).toBeNull()
   const two = JSON.stringify({ accounts: [{ email: "a@x", credentials: { refreshToken: "r1", authMethod: "social", provider: "Github" } },

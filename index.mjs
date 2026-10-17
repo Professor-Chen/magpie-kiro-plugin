@@ -2320,8 +2320,10 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
           ],
           ask: async (inputs = {}) => {
             if (!("json" in inputs))
-              return { type: "password", key: "json", message: "Paste the account's JSON (Kiro Account Manager, Cockpit, kiro.rs), or the path of its file",
-                placeholder: '{"accounts":[…]} or C:\\path\\account.json' }
+              // magpie draws this as a file chooser plus a paste box; OpenCode
+              // keeps the text prompt below, which also takes a file path
+              return { type: "file", key: "json", message: "Import an exported Kiro account",
+                placeholder: "Choose a JSON file, or paste the export. Kiro Account Manager, Cockpit, kiro.rs, or the IDE's kiro-auth-token.json." }
             if ("index" in inputs) return null
             let found
             try {
