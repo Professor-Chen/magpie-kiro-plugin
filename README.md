@@ -42,6 +42,10 @@ published as its own repository, not as a fork.
   IDE go on with it.
 - **Kiro API key (`ksk_…`)**: sent with `tokentype: API_KEY`. Its profile is
   found with `GetProfile`.
+- **Import an exported account (JSON)**: paste the JSON, or give the path
+  of the file. Accepted exports are Kiro Account Manager, Cockpit,
+  kiro.rs's `credentials.json`, and the IDE's `kiro-auth-token.json`.
+  Details are under [Importing an exported account](#importing-an-exported-account-this-fork).
 
 A browser sign-in is kept where OpenCode keeps sign-ins (`auth.json`; in
 magpie, `plugin-auth.json`) as an `oauth` entry. The entry holds the
