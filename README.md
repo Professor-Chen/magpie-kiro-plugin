@@ -1,283 +1,147 @@
 # opencode-kiro-custom
 
-Signs in to a [Kiro](https://kiro.dev) subscription (Free, Pro, Pro+,
-Power) and makes its requests, in OpenCode and in magpie. Provider id:
-`kiro-custom`.
+**简体中文** · [English](README.en.md)
 
-This is an unofficial plugin. It sits beside magpie's built-in Kiro and
-the community plugin `@magpie-community/opencode-kiro-auth` (provider id
-`kiro`): a different package, a different provider, its own sign-in. It
-does not replace either of them. In magpie it belongs on the unofficial
-GitHub list, which needs the repository tagged `magpie-plugin` and
-published as its own repository, not as a fork.
+登录 [Kiro](https://kiro.dev) 订阅（Free、Pro、Pro+、Power），在 OpenCode 和 magpie 里代发请求。供应商 id：`kiro-custom`。
 
-## Signing in
+这是非官方插件。它跟 magpie 内置的 Kiro、社区插件 `@magpie-community/opencode-kiro-auth`（供应商 id `kiro`）并排：包不同，供应商不同，登录也分开。它不替换那两个。在 magpie 里它走非官方 GitHub 列表，仓库需要打上 `magpie-plugin`，并且是独立仓库，不能是 fork。
 
-- **Kiro（Google、GitHub、AWS Builder ID、IAM Identity Center）**: the Kiro
-  IDE's own sign-in.
-  - Kiro's page (`app.kiro.dev/signin`) sends the browser back to one of
-    the ports the IDE listens on (3128, 4649, 6588, 8008, 9091, 49153,
-    50153–53153) on `127.0.0.1`. While the IDE is signing in, those ports
-    may be busy.
-  - Google and GitHub come back with a code. Kiro's auth service trades it
-    for tokens.
-  - Builder ID and Identity Center come back with an AWS sign-in URL and
-    region. The plugin registers a client with AWS's OIDC service, sends
-    the browser to AWS, and trades the code AWS returns.
-  - The account is named by the email Kiro has for it (`Get-Usage-Limits`),
-    and its plan is read from the same call.
-  - A company's own identity provider (`external_idp`) is not supported
-    here. Sign in with `kiro-cli login` and use the next method instead.
-- **使用 Kiro CLI 或 Kiro IDE 的登录**: uses the account kiro-cli is signed
-  in to, or else the Kiro IDE's. Nothing is copied. It is read each time
-  from where they keep it:
-  - kiro-cli: its SQLite database's `auth_kv` table.
-    - macOS: `~/Library/Application Support/kiro-cli/data.sqlite3`
-    - Linux: `~/.local/share/kiro-cli/data.sqlite3`
-    - Windows: `%APPDATA%\kiro-cli\data.sqlite3`
-  - The IDE: `~/.aws/sso/cache/kiro-auth-token.json`.
+更新说明见 [CHANGELOG.md](CHANGELOG.md)。
 
-  kiro-cli refreshes its own token first (`kiro-cli debug refresh-auth-token`).
-  A token the plugin refreshes itself is written back, so kiro-cli and the
-  IDE go on with it.
-- **Kiro API Key（ksk_…）**: sent with `tokentype: API_KEY`. Its profile is
-  found with `GetProfile`.
-- **导入导出的账号（JSON）**: in magpie the next step is two buttons,
-  选择文件… and 粘贴 JSON. 选择文件… opens the import page in the browser,
-  which reads the file there, so it works in magpie's window and on the
-  web alike (see below). 粘贴 JSON is the text box, which also takes a
-  path on magpie's computer. The installed magpie only draws buttons and
-  a text box, and it shows this plugin's words as they are written, so
-  those labels are Chinese. OpenCode asks for the JSON or the path of the
-  file. Accepted exports are Kiro Account Manager,
-  Cockpit, kiro.rs's `credentials.json`, and the IDE's
-  `kiro-auth-token.json`. Details are under
-  [Importing an exported account](#importing-an-exported-account-this-fork).
+## 登录
 
-A browser sign-in is kept where OpenCode keeps sign-ins (`auth.json`; in
-magpie, `plugin-auth.json`) as an `oauth` entry. The entry holds the
-tokens, the profile ARN, the region and, for AWS, the registered client.
-Refreshing such a sign-in:
+- **Kiro（Google、GitHub、AWS Builder ID、IAM Identity Center）**：走 Kiro IDE 自己的登录。
+  - Kiro 的页面（`app.kiro.dev/signin`）把浏览器送回 IDE 监听的端口之一（3128、4649、6588、8008、9091、49153、50153–53153），地址是 `127.0.0.1`。IDE 正在登录时，这些端口可能被占用。
+  - Google 和 GitHub 回来的是一个 code，由 Kiro 的认证服务换成 token。
+  - Builder ID 和 Identity Center 回来的是 AWS 登录地址和区域。插件向 AWS 的 OIDC 服务注册客户端，把浏览器送到 AWS，再换成 code 对应的 token。
+  - 账号名用 Kiro 记下的邮箱（`Get-Usage-Limits`），套餐也从同一次调用读取。
+  - 公司自己的身份源（`external_idp`）这里不支持。先用 `kiro-cli login`，再用下一种方式。
+- **使用 Kiro CLI 或 Kiro IDE 的登录**：用 kiro-cli 已经登录的账号，否则用 Kiro IDE 的。不复制，每次从它们存放的地方读：
+  - kiro-cli：SQLite 数据库的 `auth_kv` 表。
+    - macOS：`~/Library/Application Support/kiro-cli/data.sqlite3`
+    - Linux：`~/.local/share/kiro-cli/data.sqlite3`
+    - Windows：`%APPDATA%\kiro-cli\data.sqlite3`
+  - IDE：`~/.aws/sso/cache/kiro-auth-token.json`。
 
-- magpie renews the token 10 minutes before it expires, through the
-  plugin's `auth.refresh`, once for the account and before its requests,
-  models and usage need it. magpie saves the new token. A failed renewal,
-  even one Kiro refused, doesn't mark the account: it is tried again.
-- OpenCode doesn't call that hook: there the token is refreshed 2 minutes
-  before it expires, before a request, and saved.
-- Either way, a token Kiro turns down (a 403) is refreshed and the request
-  tried once more.
-- Only one refresh runs at a time, magpie's renewal included, and a token
-  refreshed but not yet saved is used rather than spending the old refresh
-  token again.
-- kiro-cli's and the IDE's sign-ins aren't renewed by magpie: they are
-  refreshed before a request, as above, and written back.
+  kiro-cli 会先刷新自己的 token（`kiro-cli debug refresh-auth-token`）。插件自己刷新得到的 token 会写回去，kiro-cli 和 IDE 接着用。
+- **Kiro API Key（ksk_…）**：以 `tokentype: API_KEY` 发送。档案用 `GetProfile` 查找。
+- **导入导出的账号（JSON）**：在 magpie 里下一步是两个按钮，「选择文件…」和「粘贴 JSON」。「选择文件…」在浏览器里打开导入页，文件在浏览器里读取，所以 magpie 窗口和网页都能用（见下文）。「粘贴 JSON」是文本框，也可以填 magpie 这台机器上的路径。已安装的 magpie 只会画按钮和文本框，插件写什么就显示什么，所以这些标签是中文。OpenCode 则询问 JSON 或文件路径。接受的导出：Kiro Account Manager、Cockpit、kiro.rs 的 `credentials.json`，以及 IDE 的 `kiro-auth-token.json`。细节见 [导入导出的账号](#导入导出的账号)。
 
-Tokens are refreshed through:
+浏览器登录保存在 OpenCode 存放登录的地方（`auth.json`；magpie 里是 `plugin-auth.json`），类型为 `oauth`。里面有 token、profile ARN、区域，AWS 登录还有注册的客户端。刷新：
 
-- Google/GitHub: through `prod.<region>.auth.desktop.kiro.dev/refreshToken`.
-- Builder ID/Identity Center: through AWS's `oidc.<region>.amazonaws.com/token`.
+- magpie 在过期前 10 分钟，经插件的 `auth.refresh` 续期，每个账号一次，并且在请求、模型列表和用量需要它之前。magpie 保存新 token。续期失败，哪怕是 Kiro 拒绝，也不把账号标成失效，下次再试。
+- OpenCode 不调用这个钩子：那边在过期前 2 分钟、发请求之前刷新并保存。
+- 两边都一样：Kiro 以 403 拒绝的 token 会先刷新，请求再试一次。
+- 同一时间只有一次刷新，包括 magpie 的续期。已经刷新但还没保存的 token 会接着用，不会把旧的 refresh token 再花一次。
+- kiro-cli 和 IDE 的登录不由 magpie 续期：它们在请求前按上面的方式刷新，并写回去。
 
-## Requests
+刷新走：
 
-Kiro has no API OpenCode speaks. The models are declared on Anthropic's
-Messages (`@ai-sdk/anthropic`), and the plugin's `fetch` handles each
-request:
+- Google / GitHub：`prod.<region>.auth.desktop.kiro.dev/refreshToken`。
+- Builder ID / Identity Center：AWS 的 `oidc.<region>.amazonaws.com/token`。
 
-- It sends the request to `runtime.<region>.kiro.dev/generateAssistantResponse`,
-  the API kiro-cli uses, with kiro-cli's headers. The region is the one the
-  profile ARN names.
-- It turns the request into a Kiro conversation:
-  - The system prompt goes at the head of the first message.
-  - Tool calls and results are paired: an unanswered call gets an error
-    result, and a result longer than 250,000 characters is cut.
-  - Tool ids Kiro wouldn't take are rewritten. A tool name over 64
-    characters (an MCP plugin's, in Claude Code) is sent shortened with a
-    hash and its calls come back under the full name.
-  - A tool's images (a screenshot, Codex's view_image) go with the
-    message that answers the call, as Kiro's tool results hold text alone.
-  - Only the latest images are sent.
-  - Tools the history used but the request doesn't offer are declared.
-- It turns the AWS event stream Kiro answers with back into Messages'
-  events (streamed) or one message. The reply includes text, thinking,
-  tool calls and usage. When Kiro reports only how full the context is,
-  input tokens are estimated from that.
-- Thinking (Claude models and Auto) is asked for the way kiro-cli asks, in
-  the prompt, with a budget: low 10k, medium 20k, high 30k, xhigh and max
-  50k (as magpie's built-in Kiro: #120). The
-  `<thinking>` block of the reply comes back as thinking.
-- Kiro's failures keep their meaning:
-  - input too long → 400
-  - no capacity → 503
-  - usage limit → 429
-  - throttling → "rate limited"
+## 请求
 
-## Models
+Kiro 没有 OpenCode 能直接说的 API。模型按 Anthropic Messages（`@ai-sdk/anthropic`）声明，每次请求由插件的 `fetch` 处理：
 
-The `config` hook declares `auto` (Kiro picks the model). Once signed in,
-the `provider.models` hook replaces it with the account's own list from
-`List-Available-Models`, with the default first. Each model carries its
-context window, output limit and whether it takes images. Claude models
-and Auto have the thinking variants.
+- 发到 `runtime.<region>.kiro.dev/generateAssistantResponse`，也就是 kiro-cli 用的 API，请求头也按 kiro-cli。区域取 profile ARN 里的那个。
+- 把请求转成 Kiro 的对话：
+  - 系统提示放在第一条消息的开头。
+  - 工具调用和结果成对：没有回应的调用补一条错误结果，超过 250,000 字符的结果会被截断。
+  - Kiro 不接受的工具 id 会改写。工具名超过 64 字符（Claude Code 里的 MCP 插件）会缩短并带上哈希，调用结果仍用全名返回。
+  - 工具里的图片（截图、Codex 的 view_image）跟在回应这次调用的消息上，因为 Kiro 的工具结果只有文本。
+  - 只发送最新的图片。
+  - 历史里用过、但这次请求没提供的工具，仍会声明。
+- 把 Kiro 返回的 AWS 事件流转回 Messages 的事件（流式）或一条消息。回复含文本、思考、工具调用和用量。Kiro 只报告上下文有多满时，输入 token 按这个估算。
+- 思考（Claude 模型和 Auto）按 kiro-cli 的方式在提示里请求，带预算：low 1 万、medium 2 万、high 3 万、xhigh 和 max 5 万（与 magpie 内置 Kiro 的 #120 一致）。回复里的 `<thinking>` 块作为思考返回。
+- Kiro 的失败保持原意：
+  - 输入过长 → 400
+  - 没有容量 → 503
+  - 用量到顶 → 429
+  - 限流 → “rate limited”
 
-## Importing an exported account (this fork)
+magpie 在还有别的 Kiro 账号可以换时，会把 Claude 只有思考、还没有正文的流压住，外面只看到 `: keepalive`，直到正文出现。本插件在思考块已经打开、第一段思考写出之后，发一帧 `response.done`。magpie 把这帧当成正文，于是把思考放行。Anthropic 客户端不认识这个事件类型就跳过，所以它不会变成思考、正文或工具调用。new-api 把同一条流转成 OpenAI Chat 时丢掉它。思考已经发出之后的安全拒答仍以 `stop_reason: "refusal"` 回到客户端；连接已经是 200，new-api 会按已经报出的用量结算。还没开始思考就拒答的，仍是失败状态，预扣退回。
 
-The sign-in method *导入导出的账号（JSON）* takes the JSON, or the path of
-the file holding it. In magpie, 选择文件… opens the import page and
-粘贴 JSON takes the text or a path. OpenCode asks for that text or path.
+## 模型
 
-The import page ([`import.html`](import.html), served by GitHub Pages at
-`https://professor-chen.github.io/magpie-kiro-plugin/import.html`; the
-`importPage` option or `KIRO_IMPORT_PAGE` names another copy) reads the
-files in the browser, several at once, and lists their accounts to tick
-(the active ones are ticked), without what the plugin doesn't keep (an
-export's passwords and notes). Each account is checked with a refresh;
-the first is this sign-in's, and each other is kept as an account of its
-own (`kiro-custom#…`, by its name, so importing it again replaces it).
-The page says which were skipped or failed, and why.
+`config` 钩子声明 `auto`（由 Kiro 选模型）。登录之后，`provider.models` 钩子用 `List-Available-Models` 换成这个账号自己的列表，默认模型排在第一。每个模型带上下文窗口、输出上限，以及是否接受图片。Claude 模型和 Auto 有思考档位。
 
-The page hands the accounts over the first way that works, so it is the
-same in magpie's window, on its web page, and with magpie in Docker or on
-a server:
+## 导入导出的账号
 
-1. The plugin's port on `127.0.0.1`, when the browser is on magpie's
-   computer.
-2. A relay, [ntfy.sh](https://ntfy.sh) by default: the page seals the
-   accounts with AES-256-GCM under a key made for this import and kept
-   only in the link's `#fragment`, which a browser never sends, and
-   publishes them to a topic named at random for it. The plugin,
-   subscribed to it while the import waits, opens them and answers on
-   the same topic with `-r`, so the page says how it went. ntfy.sh sees
-   only the sealed text, and drops it within hours. `importRelay`
-   (`KIRO_IMPORT_RELAY`) names another ntfy server, such as your own, or
-   `off`.
-3. If neither works (the relay can't be reached from magpie or the
-   browser), the page copies an address to the clipboard: paste it into
-   the address box magpie shows under the sign-in, and magpie opens it
-   on its own computer, as for Kiro's browser sign-in. Such an address
-   holds about a dozen accounts at most (magpie takes 16 KB).
+登录方式「导入导出的账号（JSON）」接受 JSON，或装着它的文件路径。在 magpie 里，「选择文件…」打开导入页，「粘贴 JSON」接受文本或路径。OpenCode 询问这段文本或路径。
 
-Accepted exports:
+导入页（[`import.html`](import.html)，由 GitHub Pages 提供，地址是 `https://professor-chen.github.io/magpie-kiro-plugin/import.html`；`importPage` 或 `KIRO_IMPORT_PAGE` 可以指定另一份）在浏览器里读文件，一次可以多个，列出账号供勾选（处于启用的默认勾上），不带插件不保存的内容（导出里的密码和备注）。每个账号先刷新检查；第一个作为这次登录，其余各自成为独立账号（`kiro-custom#…`，按名字，再次导入会替换）。页面会说明哪些被跳过或失败，以及原因。
 
-- Kiro Account Manager: `{version, exportedAt, accounts: [{email, credentials: {…}, machineId, status}]}`
-- Cockpit: `{version: "cockpit-kiro-import", accounts: [{email, auth: {…}, machineId, status}]}`
-- kiro.rs's `credentials.json`: one object or an array, `expiresAt` as RFC3339
-- the Kiro IDE's `kiro-auth-token.json` (with `clientId`/`clientSecret` for IdC)
+页面按第一个能用的办法把账号交回来，所以 magpie 窗口、网页、Docker 或服务器上的 magpie 都一样：
 
-The credentials read are `accessToken`, `refreshToken`, `expiresAt`
-(milliseconds, seconds or a date), `region`, `authMethod` (`social`, or
-`idc`; `builder-id` and `iam` are taken for `idc`), `provider`, `clientId`,
-`clientSecret`, `profileArn`, and the account's `machineId`. An account
-whose `status` isn't active, or with no refresh token, is skipped with why.
-Passwords and notes an export holds are never kept. When the export holds
-several accounts, the next question picks which one signs in (1 for the first).
-The token is refreshed before the account is kept, so a spent export fails
-at once rather than at the first request.
+1. 浏览器和 magpie 在同一台机器时，走插件在 `127.0.0.1` 上的端口。
+2. 中转，默认 [ntfy.sh](https://ntfy.sh)：页面用这次导入专用的密钥，以 AES-256-GCM 封上账号。密钥只放在链接的 `#fragment` 里，浏览器不会把它发出去。封好的文本发到一个随机主题。插件在等待导入时订阅这个主题，打开封包，并在同一主题以 `-r` 回复，页面据此说明结果。ntfy.sh 只看得到封好的文本，几小时内会丢掉。`importRelay`（`KIRO_IMPORT_RELAY`）可以换成别的 ntfy 服务器，比如自己的，或设成 `off`。
+3. 两边都走不通时（magpie 或浏览器到不了中转），页面把一个地址复制到剪贴板：贴进 magpie 登录下方的地址框，magpie 在自己的机器上打开它，跟 Kiro 的浏览器登录一样。这样的地址大约只能装十几个账号（magpie 接受 16 KB）。
 
-## Settings (this fork)
+接受的导出：
 
-Set as the plugin's options in magpie's `plugins.json`
-(`{"spec": "…", "options": {"cacheRatio": 0.8}}`) or OpenCode's
-`["…", {options}]`, else as environment variables:
+- Kiro Account Manager：`{version, exportedAt, accounts: [{email, credentials: {…}, machineId, status}]}`
+- Cockpit：`{version: "cockpit-kiro-import", accounts: [{email, auth: {…}, machineId, status}]}`
+- kiro.rs 的 `credentials.json`：一个对象或数组，`expiresAt` 为 RFC3339
+- Kiro IDE 的 `kiro-auth-token.json`（IdC 需要 `clientId` / `clientSecret`）
 
-| Option | Env | Default | |
+读到的字段：`accessToken`、`refreshToken`、`expiresAt`（毫秒、秒或日期）、`region`、`authMethod`（`social`，或 `idc`；`builder-id` 和 `iam` 也当作 `idc`）、`provider`、`clientId`、`clientSecret`、`profileArn`，以及账号的 `machineId`。`status` 不是启用的，或没有 refresh token 的，会跳过并说明原因。导出里的密码和备注一律不保存。导出里有多个账号时，下一个问题选择登录哪一个（1 是第一个）。保存前会先刷新 token，所以已经失效的导出会立刻失败，而不是等到第一次请求。
+
+## 设置
+
+写在 magpie 的 `plugins.json` 里该插件的 options（`{"spec": "…", "options": {"cacheRatio": 0.8}}`），或 OpenCode 的 `["…", {options}]`，否则用环境变量：
+
+| 选项 | 环境变量 | 默认 | |
 | --- | --- | --- | --- |
-| `cacheRatio` | `KIRO_CACHE_RATIO` | `0` | 0–1: the share of the prompt reported as `cache_read_input_tokens` when Kiro reports no cache; `input_tokens` is the rest. Kiro's own cache figures, when given, stand. |
-| `fingerprint` | `KIRO_FINGERPRINT` | `ide` | `ide`: the Kiro IDE's headers (`aws-sdk-js/1.0.34 … KiroIDE-<version>-<machineId>`); `cli`: kiro-cli's, as before. |
-| `kiroVersion` | `KIRO_VERSION` | `0.9.2` | The Kiro IDE version the fingerprint names. |
+| `cacheRatio` | `KIRO_CACHE_RATIO` | `0` | 0–1：Kiro 没有报告缓存时，提示里算作 `cache_read_input_tokens` 的比例，其余是 `input_tokens`。Kiro 自己给了缓存数字时，以它为准。 |
+| `fingerprint` | `KIRO_FINGERPRINT` | `ide` | `ide`：Kiro IDE 的请求头（`aws-sdk-js/1.0.34 … KiroIDE-<version>-<machineId>`）；`cli`：kiro-cli 的，和以前一样。 |
+| `kiroVersion` | `KIRO_VERSION` | `0.9.2` | 指纹里的 Kiro IDE 版本。 |
 | `nodeVersion` | `KIRO_NODE_VERSION` | `22.21.1` | |
-| `systemVersion` | `KIRO_SYSTEM_VERSION` | this OS (`win32#10.0.22631`) | |
-| `endpoint` | `KIRO_ENDPOINT` | `kiro` | `kiro`: `runtime.<region>.kiro.dev`; `q`: `q.<region>.amazonaws.com`. |
-| `retries` | `KIRO_RETRIES` | `2` | 0–5: tries again after a network error, an empty reply, a 408, a 429 or a 5xx, with backoff (Retry-After honoured). A monthly limit goes to the next account at once. |
-| `thinkingMin` / `thinkingMax` | `KIRO_THINKING_MIN` / `_MAX` | `1024` / `64000` | The bounds of a thinking budget, the caller's `budget_tokens` too. |
-| `budgets` | `KIRO_BUDGETS` | `low=10000,medium=20000,high=30000,xhigh=50000,max=64000` | Each effort's budget; an object as an option, `k=v,…` in the environment. |
-| `adaptive` | `KIRO_ADAPTIVE` | `false` | `true` sends a caller's `thinking: {type: "adaptive"}` as kiro-cli's adaptive mode (`<thinking_effort>low/medium/high`). Off by default: Kiro answered it without thinking in a live check (claude-sonnet-4.5), so adaptive goes as its effort's budget. |
-| `effortField` | `KIRO_EFFORT_FIELD` | `auto` | `auto` asks the Claudes that think natively on Kiro (Opus and Sonnet 4.7 and later) by their own fields, `additionalModelRequestFields: {thinking: {type: "adaptive"}, output_config: {effort}}`, as the prompt's tags do nothing for them. `off` asks every model by the prompt. 4.6, 4.5, Haiku and the other vendors' models always think by the prompt; 4.5 and Haiku turn the field away. |
-| `minInterval` | `KIRO_MIN_INTERVAL_MS` | `0` | The least time between two requests of one account. |
-| `toolDescriptionLimit` | `KIRO_TOOL_DESCRIPTION_LIMIT` | `9216` | A tool's description is cut at this. |
-| `meter` | `KIRO_METER` | `on` | `on`: the usage's cache tokens, and a native thinker's unshown reasoning, are read from what Kiro metered (below); `off`: `cacheRatio` stands in. |
-| `importPage` | `KIRO_IMPORT_PAGE` | GitHub Pages | The import page 选择文件… opens: a copy of `import.html` served elsewhere (http or https). |
-| `importRelay` | `KIRO_IMPORT_RELAY` | `https://ntfy.sh` | The ntfy server the import page hands sealed accounts to when its browser is on another computer; `off` for none. |
+| `systemVersion` | `KIRO_SYSTEM_VERSION` | 本机系统（`win32#10.0.22631`） | |
+| `endpoint` | `KIRO_ENDPOINT` | `kiro` | `kiro`：`runtime.<region>.kiro.dev`；`q`：`q.<region>.amazonaws.com`。 |
+| `retries` | `KIRO_RETRIES` | `2` | 0–5：网络错误、空回复、408、429 或 5xx 之后再试，带退避（遵守 Retry-After）。月度限额立刻换下一个账号。 |
+| `thinkingMin` / `thinkingMax` | `KIRO_THINKING_MIN` / `_MAX` | `1024` / `64000` | 思考预算的上下限，调用方的 `budget_tokens` 也受这个限制。 |
+| `budgets` | `KIRO_BUDGETS` | `low=10000,medium=20000,high=30000,xhigh=50000,max=64000` | 每个力度的预算。选项里是对象，环境变量里是 `k=v,…`。 |
+| `adaptive` | `KIRO_ADAPTIVE` | `false` | `true` 时，调用方的 `thinking: {type: "adaptive"}` 按 kiro-cli 的自适应模式发送（`<thinking_effort>low/medium/high`）。默认关：实测 Kiro 对它的回答没有思考（claude-sonnet-4.5），所以自适应按该力度的预算发送。 |
+| `effortField` | `KIRO_EFFORT_FIELD` | `auto` | `auto` 对在 Kiro 上原生思考的 Claude（Opus 和 Sonnet 4.7 及以后）用它们自己的字段请求：`additionalModelRequestFields: {thinking: {type: "adaptive"}, output_config: {effort}}`，因为提示里的标签对它们不起作用。`off` 则全部用提示。4.6、4.5、Haiku 和其他厂商的模型始终用提示思考；4.5 和 Haiku 会拒绝这个字段。 |
+| `minInterval` | `KIRO_MIN_INTERVAL_MS` | `0` | 同一账号两次请求之间的最短间隔。 |
+| `toolDescriptionLimit` | `KIRO_TOOL_DESCRIPTION_LIMIT` | `9216` | 工具描述截断到这个长度。 |
+| `meter` | `KIRO_METER` | `on` | `on`：用量里的缓存 token，以及原生思考模型没有展示出来的推理，从 Kiro 的计量读取（见下）；`off`：用 `cacheRatio` 代替。 |
+| `importPage` | `KIRO_IMPORT_PAGE` | GitHub Pages | 「选择文件…」打开的导入页：别处提供的 `import.html`（http 或 https）。 |
+| `importRelay` | `KIRO_IMPORT_RELAY` | `https://ntfy.sh` | 浏览器和 magpie 不在同一台机器时，导入页把封好的账号交给的 ntfy 服务器；`off` 表示不用。 |
 
-### Usage, read from what Kiro metered (this fork)
+### 用量：从 Kiro 的计量读取
 
-Kiro tells no token counts: its stream's `metadataEvent` defines a
-`tokenUsage` with `cacheReadInputTokens`, but never sends it, and kiro-cli's
-own client reports none (`usage: None // if only rts gave usage
-metrics...`). It does tell two exact figures: the prompt's size
-(`contextUsagePercentage` × the model's window, by its own tokenizer) and
-what the request cost (`meteringEvent`, in credits). With each model's
-three prices, calibrated live (`PRICES`: a fresh input token, a cached one,
-an output token), the cache follows:
+Kiro 不给 token 数：流里的 `metadataEvent` 定义了带 `cacheReadInputTokens` 的 `tokenUsage`，但从不发送；kiro-cli 自己的客户端也报 `usage: None`。它给两个准确数字：提示的大小（`contextUsagePercentage` × 模型窗口，用它自己的分词器）和这次请求花了多少（`meteringEvent`，单位是积分）。用每个模型的三个单价（`PRICES`：全新输入、缓存输入、输出，实测标定过），缓存可以算出来：
 
     credits = fresh × (prompt − cached) + cached_price × cached + output × reply
 
-so `cache_read_input_tokens` is what Kiro's cache actually read, and
-`input_tokens` the rest. Credits past a cold prompt and the reply are a
-native thinker's reasoning, told only in summary: told as output tokens, so
-the reply is billed as Kiro billed it. Priced back with the same prices, the
-usage comes to what Kiro metered: in a live five-turn conversation within
-0.01% (Sonnet 4.5: 41–47% of each later prompt cached; Opus 5.5: 72–86%).
+所以 `cache_read_input_tokens` 是 Kiro 的缓存实际读到的，`input_tokens` 是其余。超过一次冷提示加回复的积分，是原生思考模型的推理，只以摘要出现，按输出 token 计入，这样回复的计费和 Kiro 的计量一致。用同一套单价折回去，用量和 Kiro 的计量相符：五轮实测对话误差在 0.01% 以内（Sonnet 4.5 后续每轮提示有 41–47% 命中缓存；Opus 5.5 为 72–86%）。
 
-The reply's tokens are its characters over the model's characters a token
-(calibrated, e.g. 4.59 for Sonnet 4.5, 3.34 for Opus 5.5's newer
-tokenizer), refined at no cost: the next turn of a conversation holds the
-reply, and Kiro's exact context grows by its tokens.
+回复的 token 是字符数除以该模型每个 token 的字符数（标定值，例如 Sonnet 4.5 为 4.59，Opus 5.5 较新的分词器为 3.34），再零成本修正：对话的下一轮带着这条回复，Kiro 给出的准确上下文按它的 token 数增长。
 
-What the calibration found: Kiro meters a Claude's cached token at 0.526
-of a fresh one (Opus and Sonnet 5.5: 0.266), and caches nothing of GPT-5.6,
-DeepSeek, MiniMax or GLM. Kiro caches by itself: the plugin's cache points,
-their place, and the conversation id change nothing.
+标定结果：Kiro 把 Claude 的缓存 token 按全新 token 的 0.526 计量（Opus 和 Sonnet 5.5 为 0.266），GPT-5.6、DeepSeek、MiniMax、GLM 则完全不缓存。缓存由 Kiro 自己决定：插件的缓存点、位置和对话 id 都改变不了。
 
-A refusal (Kiro's safety filter: `stopDetails.refusal`, e.g. `BIO`) is
-answered as one: its explanation as the text, `stop_reason: "refusal"`,
-rather than tried again as an empty reply.
+拒答（Kiro 的安全过滤：`stopDetails.refusal`，例如 `BIO`）就按拒答返回：说明作为文本，`stop_reason: "refusal"`，而不是当成空回复再试一次。
 
-Thinking: each effort is its own budget (`max` is past `xhigh`), the
-caller's `budget_tokens` is used when it names no effort, and
-`thinking: {type: "disabled"}` asks none.
+思考：每个力度有自己的预算（`max` 高于 `xhigh`）。调用方没指定力度时用它的 `budget_tokens`。`thinking: {type: "disabled"}` 不请求思考。
 
-How Kiro's models think, as live checks on a Kiro Pro+ account found:
+Kiro 上各模型怎么思考，来自 Kiro Pro+ 账号的实测：
 
-- Opus and Sonnet 4.7 and later think on their own, whatever the prompt
-  says, their reasoning streamed apart (`reasoningContentEvent`, a summary
-  of it). `output_config.effort` sets how much: on one hard question,
-  `low` 47 reasoning frames and 0.23 credits, `max` 218 and 0.77. Their
-  `thinking.type` takes `"adaptive"` alone (`"enabled"` is a 400). They
-  are asked so (`effortField: auto`); a caller that asks no thinking is
-  shown none of theirs, and with thinking turned off they are asked the
-  least (`low`).
-- Sonnet and Opus 4.6 and 4.5 (and Auto) think only as the prompt's
-  `<thinking_mode>` tags ask, in the reply's words between `<thinking>`
-  tags, which are taken out as thinking. kiro-cli's adaptive tags
-  (`<thinking_effort>`) were answered without thinking (`adaptive: false`).
+- Opus 和 Sonnet 4.7 及以后自己会思考，提示怎么写都一样，推理单独成流（`reasoningContentEvent`，是摘要）。`output_config.effort` 决定想多少：一道难题上，`low` 是 47 帧推理、0.23 积分，`max` 是 218 帧、0.77 积分。它们的 `thinking.type` 只接受 `"adaptive"`（`"enabled"` 是 400）。按这个方式请求（`effortField: auto`）。调用方不要思考时，不展示它们的推理；关掉思考时，按最低档（`low`）请求。
+- Sonnet 和 Opus 的 4.6、4.5（以及 Auto）只在提示里的 `<thinking_mode>` 标签要求时才思考，思考写在回复的 `<thinking>` 标签之间，再被取出来。kiro-cli 的自适应标签（`<thinking_effort>`）实测没有产生思考（`adaptive: false`）。
 
-What the model thought in earlier turns goes back in the history as
-`<thinking>…</thinking>` for a model that thinks by the prompt, so a
-thinking conversation goes on from its own reasoning. The thinking ends at
-its own closing tag only: not one quoted (`` `</thinking>` ``), and
-followed by a blank line or the reply's end.
+用提示思考的模型，前面几轮想过的内容会以 `<thinking>…</thinking>` 放回历史，思考对话能接着自己的推理往下走。思考只在它自己的结束标签处结束：被引用的（`` `</thinking>` ``）不算，并且后面要是空行或回复结束。
 
-Also: a tool call Kiro's model says in words (`[Called Bash with args:
-{…}]`) is given as the call, for a tool the request offered; a 403 saying
-the account is suspended (`TEMPORARILY_SUSPENDED`, terms of service) marks
-its sign-in expired in magpie (`X-Magpie-Sign-In: expired`), so the next
-request goes to another account, rather than refreshing it; and a Google or
-GitHub sign-in is refreshed as the IDE the requests name.
+另外：模型用文字说出的工具调用（`[Called Bash with args: {…}]`）会转成调用，前提是这次请求提供了这个工具。403 且说明账号被暂停（`TEMPORARILY_SUSPENDED`，服务条款）时，在 magpie 里把这次登录标成过期（`X-Magpie-Sign-In: expired`），下一个请求换账号，而不是刷新它。Google 或 GitHub 登录按请求所声称的 IDE 来刷新。
 
-The machine id is the account's own (64 hex, or a UUID doubled), else a
-hash of the account's name, so it stays the same across refreshes.
+机器 id 用账号自己的（64 位十六进制，或一个 UUID 重复一遍），否则用账号名的哈希，刷新之后保持不变。
 
-Also in this fork: `message_start` tells the prompt's estimated size (it
-said 0 until the end), the prompt is estimated from the request when Kiro
-tells nothing of it, and a stream silent for 15 seconds (thinking, a long
-tool call) is kept alive with `ping` events.
+这个分支里还有：`message_start` 会报出提示的估算大小（以前要到结束才不是 0）；Kiro 什么都没说时，提示大小按请求估算；流沉默 15 秒（思考、一次很长的工具调用）时，用 `ping` 事件保持连接。
 
-## Not included
+## 不包括
 
-- Usage and quota (credits, the monthly window).
-- Switching between several accounts. OpenCode keeps one sign-in per
-  provider.
-- Signing in with a company's own identity provider in the browser (use
-  kiro-cli's sign-in).
-- magpie's web-search stand-in for Kiro.
+- 用量和配额的展示（积分、月度窗口）。
+- 在插件内部切换多个账号。OpenCode 每个供应商只保留一个登录。
+- 在浏览器里用公司自己的身份源登录（用 kiro-cli 的登录）。
+- magpie 为 Kiro 准备的网页搜索替身。

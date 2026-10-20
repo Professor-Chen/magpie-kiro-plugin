@@ -112,6 +112,37 @@ test("the stream's metering becomes the usage, the cache read from it", async ()
   expect(stop.usage.input).toBe(0)
 })
 
+const sseOf = async (res) => (await res.text()).split("\n\n").filter(Boolean).map((b) => {
+  const [e, d] = b.split("\n")
+  return { event: e.slice(7), data: JSON.parse(d.slice(6)) }
+})
+
+test("the first thinking delta releases magpie's hold once, and a reply without thinking does not", async () => {
+  const budget = { budget: 1000, native: true }
+  const thinking = await reply(events(body(
+    ev("reasoningContentEvent", { text: "先想" }),
+    ev("reasoningContentEvent", { text: "清楚" }),
+    ev("assistantResponseEvent", { content: "答案" }),
+    ev("metadataEvent", { stopReason: "END_TURN" }),
+  ), "claude-opus-5.5", budget), "claude-opus-5.5", true)
+  const evs = await sseOf(thinking)
+  const gates = evs.filter((e) => e.event === "response.done")
+  expect(gates).toHaveLength(1)
+  expect(gates[0].data).toEqual({ type: "response.done" })
+  const start = evs.findIndex((e) => e.data?.content_block?.type === "thinking")
+  const firstThink = evs.findIndex((e) => e.data?.delta?.type === "thinking_delta")
+  const gate = evs.findIndex((e) => e.event === "response.done")
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(firstThink).toBe(start + 1)
+  expect(gate).toBe(firstThink + 1)
+  expect(evs.filter((e) => e.data?.delta?.type === "thinking_delta").map((e) => e.data.delta.thinking).join("")).toBe("先想清楚")
+  expect(evs.filter((e) => e.data?.delta?.type === "text_delta").map((e) => e.data.delta.text).join("")).toBe("答案")
+
+  const plain = await reply(events(body(ev("assistantResponseEvent", { content: "hi" }), ev("metadataEvent", { stopReason: "END_TURN" })),
+    "claude-x", null), "claude-x", true)
+  expect((await sseOf(plain)).some((e) => e.event === "response.done")).toBe(false)
+})
+
 test("a refusal is an answer with stop_reason refusal, not a retried failure", async () => {
   const refused = ev("metadataEvent", { stopDetails: { refusal: { category: "BIO", explanation: "The selected model cannot continue this conversation." } } })
   const evs = await all(events(body(refused, ev("contextUsageEvent", { contextUsagePercentage: 2 })), "claude-x", null, 100))

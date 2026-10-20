@@ -1847,6 +1847,7 @@ async function reply(it, model, stream, names = new Map(), estimate = 0) {
   let index = -1
   let open = "" // the kind of block open
   let started = false
+  let opened = false // the hold on a Claude's thinking has been released once
   let waiting = null // the event awaited across pings
   const body = new ReadableStream({
     async pull(ctl) {
@@ -1897,6 +1898,16 @@ async function reply(it, model, stream, names = new Map(), estimate = 0) {
         case "think":
           if (open !== "thinking") begin("thinking", { type: "thinking", thinking: "", signature: "" })
           ctl.enqueue(sse("content_block_delta", { index, delta: { type: "thinking_delta", thinking: e.text } }))
+          // magpie holds a Claude's thinking while another account could
+          // still answer, and only lets it through on content. response.done
+          // is that to magpie: Anthropic's client skips an event it doesn't
+          // know, and new-api drops it when turning the stream into OpenAI
+          // Chat, so it never becomes text or a tool call. Once, on the
+          // first thinking delta, after the block has started.
+          if (!opened) {
+            opened = true
+            ctl.enqueue(sse("response.done", {}))
+          }
           break
         case "sig":
           if (open === "thinking") ctl.enqueue(sse("content_block_delta", { index, delta: { type: "signature_delta", signature: e.text } }))
