@@ -62,7 +62,9 @@ const SIGN_IN_TIMEOUT = 10 * 60 * 1000
 
 // The plugin's settings, from its entry's options in magpie's plugins.json
 // ({"spec": "…", "options": {"cacheRatio": 0.8}}) or OpenCode's
-// ["…", {options}], else KIRO_* environment variables:
+// ["…", {options}], else KIRO_* environment variables. web and dropHidden
+// are also switches in the provider's editor (auth.options, read on the
+// next request):
 //   - cacheRatio (KIRO_CACHE_RATIO, 0–1): the share of the prompt reported as
 //     read from the cache when Kiro reports none, as a relay's billing and
 //     Claude Code's display read it; 0, the default, reports none
@@ -95,9 +97,17 @@ const SIGN_IN_TIMEOUT = 10 * 60 * 1000
 //   - meter (KIRO_METER): "on" (the default) reads the cache tokens, and
 //     a native thinker's unshown reasoning, from what Kiro metered (meter());
 //     "off" leaves them to cacheRatio
+//   - web (KIRO_WEB): each message says it comes from Kiro Web (KIRO_WEB)
+//     rather than kiro-cli (KIRO_CLI), and Kiro puts a shorter prompt of
+//     its own before it (HIDDEN: 740 tokens rather than 4052 for Sonnet
+//     4.5); off by default
+//   - dropHidden (KIRO_DROP_HIDDEN): the prompt's tokens are told without
+//     Kiro's own prompt (HIDDEN), the cache's share of them first; off by
+//     default, the prompt told as Kiro counted it. An estimate of the
+//     caller's own request, Kiro having told no size, is left as it is
 const DEFAULTS = { cacheRatio: 0, fingerprint: "ide", kiroVersion: "0.9.2", nodeVersion: "22.21.1", systemVersion: "",
   endpoint: "kiro", retries: 2, thinkingMin: 1024, thinkingMax: 64000, budgets: "", adaptive: false, effortField: "auto",
-  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", importPage: "", importRelay: "" }
+  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", web: false, dropHidden: false, importPage: "", importRelay: "" }
 const cfg = { ...DEFAULTS }
 // BUDGETS are each effort's thinking budget (xhigh its own level: #120)
 const BASE_BUDGETS = { low: 10000, medium: 20000, high: 30000, xhigh: 50000, max: 64000 }
@@ -122,6 +132,8 @@ function configure(o = {}) {
   cfg.minInterval = Math.trunc(clamp(pick("minInterval", "KIRO_MIN_INTERVAL_MS"), 0, 60000, 0))
   cfg.toolDescriptionLimit = Math.trunc(clamp(pick("toolDescriptionLimit", "KIRO_TOOL_DESCRIPTION_LIMIT"), 256, 100000, 9216))
   cfg.meter = String(pick("meter", "KIRO_METER")).toLowerCase() === "off" ? "off" : "on"
+  cfg.web = bool(pick("web", "KIRO_WEB"), false)
+  cfg.dropHidden = bool(pick("dropHidden", "KIRO_DROP_HIDDEN"), false)
   const ip = String(pick("importPage", "KIRO_IMPORT_PAGE"))
   cfg.importPage = /^https?:\/\//i.test(ip) ? ip : IMPORT_PAGE
   // where the import page hands the accounts over when its browser can't
@@ -904,6 +916,9 @@ function effortOfBudget(budget) {
   return best
 }
 
+// originOf is who each message says sent it: kiro-cli, or Kiro Web (web).
+const originOf = () => (cfg.web ? "KIRO_WEB" : "KIRO_CLI")
+
 // buildKiro is the body of a generateAssistantResponse call. think is
 // thinking()'s (a number, the budget alone, is taken too).
 function buildKiro(req, model, profile, think) {
@@ -915,7 +930,7 @@ function buildKiro(req, model, profile, think) {
   const mark = (msg, parts) => {
     if (parts.some((p) => p?.cache_control)) marked.add(msg)
   }
-  const user = () => ({ content: "", modelId: model, origin: "KIRO_CLI" })
+  const user = () => ({ content: "", modelId: model, origin: originOf() })
   for (const m of req.messages ?? []) {
     const parts = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content ?? []
     const texts = []
@@ -1465,6 +1480,7 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
   let tools = 0
   let stop = ""
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  let kiroCounted = false // the prompt's size is Kiro's, its own prompt included
   let pct = 0
   let said = 0
   let failed = ""
@@ -1541,10 +1557,14 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
         if (m.stopReason) stop = m.stopReason
         const tu = m.tokenUsage
         if (tu && typeof tu === "object") {
-          usage.input += tu.uncachedInputTokens || tu.inputTokens || 0
+          const inn = tu.uncachedInputTokens || tu.inputTokens || 0
+          const cr = tu.cacheReadInputTokens || 0
+          const cw = tu.cacheWriteInputTokens || 0
+          usage.input += inn
           usage.output += tu.outputTokens || 0
-          usage.cacheRead += tu.cacheReadInputTokens || 0
-          usage.cacheWrite += tu.cacheWriteInputTokens || 0
+          usage.cacheRead += cr
+          usage.cacheWrite += cw
+          if (inn || cr || cw) kiroCounted = true
           if (tu.contextUsagePercentage > 0) pct = tu.contextUsagePercentage
         }
       } else if (kind === "contextUsageEvent") {
@@ -1586,7 +1606,10 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
   // Kiro says how full the context is rather than how many tokens; with
   // neither, the request's own size, estimated
   const exact = pct > 0 && window > 0 ? Math.floor((pct / 100) * window) : 0
-  if (!usage.input && exact) usage.input = exact
+  if (!usage.input && exact) {
+    usage.input = exact
+    kiroCounted = true
+  }
   if (!usage.input && estimate > 0) usage.input = estimate
   // what the conversation's last reply came to, exact, from this prompt
   if (req && exact) learnFrom(req, model, exact)
@@ -1596,6 +1619,10 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
   if (!(usage.cacheRead || usage.cacheWrite)) {
     if (!meter(usage, model, credits)) withCache(usage)
   }
+  // Kiro's own prompt is in the size it counted; told without it when
+  // asked (withoutHidden). The estimate above is the caller's request
+  // alone, so it is left
+  if (kiroCounted) withoutHidden(usage, model)
   // a plain reply (no call, no thought) is kept for the next turn to learn
   if (req && exact && !tools && !thought) remember(req, model, exact, spokenChars)
   let reason = "end_turn"
@@ -1752,6 +1779,50 @@ function meter(usage, model, credits) {
   usage.input = T - read
   usage.credits = credits
   return true
+}
+
+// HIDDEN is the tokens of Kiro's own prompt, measured live (testenv
+// probe-reply, part hidden2): a bare ask's context, less that ask and the
+// one-token reply. cli is what origin KIRO_CLI adds, web what KIRO_WEB
+// adds (the shorter one). A model not measured is left as Kiro counted it.
+const HIDDEN = {
+  "auto": { cli: 5806, web: 1106 },
+  "claude-opus-5.5": { cli: 6698, web: 1262 },
+  "claude-sonnet-5.5": { cli: 6509, web: 1197 },
+  "claude-opus-5": { cli: 6696, web: 1260 },
+  "claude-sonnet-5": { cli: 6507, web: 1195 },
+  "claude-opus-4.8": { cli: 6421, web: 1195 },
+  "claude-opus-4.7": { cli: 5907, web: 1202 },
+  "claude-opus-4.6": { cli: 4114, web: 802 },
+  "claude-opus-4.5": { cli: 4052, web: 740 },
+  "claude-sonnet-4.6": { cli: 4055, web: 742 },
+  "claude-sonnet-4.5": { cli: 4052, web: 740 },
+  "claude-haiku-4.5": { cli: 4054, web: 741 },
+  "gpt-5.6-sol": { cli: 1526, web: 930 },
+  "gpt-5.6-terra": { cli: 1526, web: 930 },
+  "gpt-5.6-luna": { cli: 1526, web: 930 },
+  "deepseek-3.2": { cli: 3699, web: 665 },
+  "minimax-m2.5": { cli: 3870, web: 696 },
+  "minimax-m2.1": { cli: 3632, web: 686 },
+  "glm-5": { cli: 3883, web: 673 },
+  "qwen3-coder-next": { cli: 3646, web: 682 },
+  "kimi-k3": { cli: 4082, web: 767 },
+}
+
+// withoutHidden takes Kiro's own prompt out of a count Kiro made, so the
+// caller isn't told those tokens. The cached share goes first: that prompt
+// is the part Kiro caches. What remains comes out of the fresh tokens.
+// The reply is left as it was. Off unless dropHidden.
+function withoutHidden(usage, model) {
+  if (!cfg.dropHidden) return usage
+  const h = HIDDEN[String(model).toLowerCase().replace(/^.*:/, "")]
+  let n = h ? (cfg.web ? h.web : h.cli) : 0
+  if (!(n > 0)) return usage
+  const fromCache = Math.min(usage.cacheRead || 0, n)
+  usage.cacheRead = (usage.cacheRead || 0) - fromCache
+  n -= fromCache
+  if (n > 0) usage.input = Math.max(0, (usage.input || 0) - n)
+  return usage
 }
 
 // estimateInput is how many tokens a request's prompt holds, roughly, for
@@ -2536,12 +2607,25 @@ async function bodyOf(input, init) {
   return JSON.parse(typeof b === "string" ? b : new TextDecoder().decode(b))
 }
 
-export async function KiroAuthPlugin({ client } = {}, options = {}) {
+export async function KiroAuthPlugin({ client, magpie } = {}, options = {}) {
   configure(options)
   const creds = account(client)
+  // a switch in the provider's editor, as it stands now: the user's value,
+  // else the default declared below (itself this entry's options, or the
+  // environment). OpenCode has no editor for them and leaves cfg as configure set it.
+  const switched = (key) => (typeof magpie?.option === "function" ? magpie.option(ID, key) === true : null)
   return {
     auth: {
       provider: ID,
+      // magpie draws these Off/On in the provider's editor (#2038). The
+      // keys stay lowercase: the host drops any other. Nothing runs when
+      // one changes; the next request reads it.
+      options: [
+        { key: "web", label: "Kiro Web", default: cfg.web,
+          description: "每条消息声明来自 Kiro Web，Kiro 加在前面的提示更短。Sonnet 4.5 是 740 个 token，不是 kiro-cli 的 4052。" },
+        { key: "drop-hidden", label: "去掉 Kiro 自带提示", default: cfg.dropHidden,
+          description: "报出的用量去掉 Kiro 自己加的那段提示，先从缓存扣，再从全新输入扣。回复的 token 不变。Kiro 没给出上下文大小时不扣。" },
+      ],
       // magpie renews a sign-in kept here LEAD_MS before its end, once for
       // the account, before its requests, models and usage ask for it; the
       // check before each request stays for OpenCode, which doesn't call
@@ -2571,6 +2655,10 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
             } catch {
               return errorResponse(400, "a request that isn't JSON")
             }
+            const web = switched("web")
+            const drop = switched("drop-hidden")
+            if (web !== null) cfg.web = web
+            if (drop !== null) cfg.dropHidden = drop
             return generate(creds, (await getAuth()) ?? auth, req, init.signal)
           },
         }
@@ -2657,5 +2745,5 @@ export async function KiroAuthPlugin({ client } = {}, options = {}) {
 // for tests
 export const _internal = { generate, refresh, usageOf, buildKiro, events, reply, failure, toolID, toolName, toolNames, thinking, configModel, runtimeModel, readCLI, readIDE, regionOf, planName, frames,
   importedAccounts, expiresOf, machineIdOf, normalizeMachineId, kiroHeaders, chatURL, configure, cfg, withCache, estimateInput, jsonSignIn, importSource, importPacked, pageSignIn, importAll, seal, unseal,
-  thinkingPrefix, effortField, BUDGETS, TextCalls, realClose, refreshUA, SUSPENDED, meter, PRICES, learned, turns, charsOf, windowsOf: () => windows,
+  thinkingPrefix, effortField, BUDGETS, TextCalls, realClose, refreshUA, SUSPENDED, meter, PRICES, learned, turns, charsOf, windowsOf: () => windows, HIDDEN, withoutHidden,
   setPing: (ms) => (PING_MS = ms) }

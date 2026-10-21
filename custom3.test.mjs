@@ -5,7 +5,7 @@
 import { test, expect, afterEach } from "bun:test"
 import { _internal } from "./index.mjs"
 
-const { meter, PRICES, events, reply, configure, learned, turns, charsOf } = _internal
+const { meter, PRICES, events, reply, configure, learned, turns, charsOf, buildKiro, HIDDEN } = _internal
 
 const saved = { ...PRICES }
 afterEach(() => {
@@ -110,6 +110,109 @@ test("the stream's metering becomes the usage, the cache read from it", async ()
   expect(stop.usage.output).toBe(10)
   expect(stop.usage.cacheRead).toBe(10000)
   expect(stop.usage.input).toBe(0)
+})
+
+// Kiro's own prompt (HIDDEN) is inside the size it counted. dropHidden
+// tells the prompt without it, the cached share first. Sonnet 4.5: 4052
+// under KIRO_CLI, 740 under KIRO_WEB.
+test("dropHidden takes Kiro's own prompt out of the count, the cached share first", async () => {
+  const model = "claude-sonnet-4.5"
+  PRICES[model] = P
+  _internal.windowsOf().set(model, 200000)
+  const said = "OK".padEnd(44, ".")
+  const turn = (credits) => body(
+    ev("assistantResponseEvent", { content: said }),
+    ev("contextUsageEvent", { contextUsagePercentage: 5 }),
+    ev("metadataEvent", { stopReason: "END_TURN" }),
+    ev("meteringEvent", { unit: "credit", usage: credits }),
+  )
+  const stop = async (credits) => (await all(events(turn(credits), model, null, 0))).at(-1).usage
+  const hidden = HIDDEN[model].cli
+  configure({ dropHidden: true })
+  const cached = await stop((2.16 * 10000 + 128 * 10) / 1e6)
+  expect(cached.cacheRead).toBe(10000 - hidden)
+  expect(cached.input).toBe(0)
+  expect(cached.output).toBe(10)
+  const cold = await stop((4.1 * 10000 + 128 * 10) / 1e6)
+  expect(cold.cacheRead).toBe(0)
+  expect(cold.input).toBe(10000 - hidden)
+  // less cached than the hidden prompt: the cache goes, then the fresh tokens
+  const part = await stop((4.1 * 8000 + 2.16 * 2000 + 128 * 10) / 1e6)
+  expect(part.cacheRead).toBe(0)
+  expect(part.input).toBe(10000 - hidden)
+  configure({ dropHidden: true, web: true })
+  const web = await stop((2.16 * 10000 + 128 * 10) / 1e6)
+  expect(web.cacheRead).toBe(10000 - HIDDEN[model].web)
+  expect(web.input).toBe(0)
+  configure({ dropHidden: false })
+  const full = await stop((2.16 * 10000 + 128 * 10) / 1e6)
+  expect(full.cacheRead).toBe(10000)
+  expect(full.input).toBe(0)
+})
+
+test("a model with no measured prompt, and an estimate Kiro never sized, are left whole", async () => {
+  const model = "claude-unmeasured"
+  PRICES[model] = P
+  _internal.windowsOf().set(model, 200000)
+  configure({ dropHidden: true })
+  const said = "OK".padEnd(44, ".")
+  const sized = (await all(events(body(
+    ev("assistantResponseEvent", { content: said }),
+    ev("contextUsageEvent", { contextUsagePercentage: 5 }),
+    ev("metadataEvent", { stopReason: "END_TURN" }),
+    ev("meteringEvent", { unit: "credit", usage: (2.16 * 10000 + 128 * 10) / 1e6 }),
+  ), model, null, 0))).at(-1).usage
+  expect(sized.cacheRead).toBe(10000)
+  expect(sized.input).toBe(0)
+  // no context percentage: the estimate is the caller's own request
+  const guessed = (await all(events(body(
+    ev("assistantResponseEvent", { content: said }),
+    ev("metadataEvent", { stopReason: "END_TURN" }),
+    ev("meteringEvent", { unit: "credit", usage: (2.16 * 100 + 128 * 10) / 1e6 }),
+  ), "claude-sonnet-4.5", null, 100))).at(-1).usage
+  expect(guessed.cacheRead).toBe(100)
+  expect(guessed.input).toBe(0)
+})
+
+test("the provider's editor has switches, and the next request reads them", async () => {
+  const chosen = { web: false, "drop-hidden": false }
+  const magpie = { option: (id, key) => id === "kiro-custom" && chosen[key] === true }
+  const { KiroAuthPlugin } = await import("./index.mjs")
+  const hooks = await KiroAuthPlugin({ client: { auth: { set: async () => {} } }, magpie }, { retries: 0 })
+  expect(hooks.auth.options.map((o) => [o.key, o.label, o.default])).toEqual([
+    ["web", "Kiro Web", false],
+    ["drop-hidden", "去掉 Kiro 自带提示", false],
+  ])
+  expect(hooks.auth.options.every((o) => o.description)).toBe(true)
+  const auth = { type: "oauth", access: "test-access", refresh: "test-refresh", expires: Date.now() + 3600_000, method: "social",
+    region: "us-east-1", profileArn: "arn:aws:codewhisperer:us-east-1:111111111111:profile/TEST" }
+  const loader = await hooks.auth.loader(async () => auth)
+  const origins = []
+  globalThis.fetch = async (_url, init) => {
+    origins.push(JSON.parse(init.body).conversationState.currentMessage.userInputMessage.origin)
+    return new Response("no", { status: 500 })
+  }
+  const ask = () => loader.fetch("https://kiro.invalid/v1/messages", { method: "POST", body: JSON.stringify({ model: "auto", max_tokens: 8, messages: [{ role: "user", content: "hi" }] }) })
+  await ask()
+  expect(origins).toEqual(["KIRO_CLI"])
+  expect(_internal.cfg.dropHidden).toBe(false)
+  chosen.web = true
+  chosen["drop-hidden"] = true
+  await ask()
+  expect(origins).toEqual(["KIRO_CLI", "KIRO_WEB"])
+  expect(_internal.cfg.dropHidden).toBe(true)
+})
+
+test("web says each message comes from Kiro Web", () => {
+  const req = { messages: [{ role: "user", content: "hi" }, { role: "assistant", content: "ok" }, { role: "user", content: "more" }] }
+  const origins = () => {
+    const st = JSON.parse(buildKiro(req, "auto", "", null)).conversationState
+    return [st.history[0].userInputMessage.origin, st.currentMessage.userInputMessage.origin]
+  }
+  configure({})
+  expect(origins()).toEqual(["KIRO_CLI", "KIRO_CLI"])
+  configure({ web: true })
+  expect(origins()).toEqual(["KIRO_WEB", "KIRO_WEB"])
 })
 
 const sseOf = async (res) => (await res.text()).split("\n\n").filter(Boolean).map((b) => {

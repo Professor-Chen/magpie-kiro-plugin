@@ -180,7 +180,9 @@ at once rather than at the first request.
 
 Set as the plugin's options in magpie's `plugins.json`
 (`{"spec": "…", "options": {"cacheRatio": 0.8}}`) or OpenCode's
-`["…", {options}]`, else as environment variables:
+`["…", {options}]`, else as environment variables. `web` and `dropHidden`
+are also two switches in this provider's settings (Kiro Web, and dropping
+Kiro's own prompt), read on the next request:
 
 | Option | Env | Default | |
 | --- | --- | --- | --- |
@@ -198,6 +200,8 @@ Set as the plugin's options in magpie's `plugins.json`
 | `minInterval` | `KIRO_MIN_INTERVAL_MS` | `0` | The least time between two requests of one account. |
 | `toolDescriptionLimit` | `KIRO_TOOL_DESCRIPTION_LIMIT` | `9216` | A tool's description is cut at this. |
 | `meter` | `KIRO_METER` | `on` | `on`: the usage's cache tokens, and a native thinker's unshown reasoning, are read from what Kiro metered (below); `off`: `cacheRatio` stands in. |
+| `web` | `KIRO_WEB` | `false` | `true`: each message says it comes from Kiro Web (`KIRO_WEB`) rather than kiro-cli. Kiro puts a shorter prompt of its own in front (Sonnet 4.5: 740 tokens rather than 4052). |
+| `dropHidden` | `KIRO_DROP_HIDDEN` | `false` | `true`: the reported prompt omits Kiro's own prompt (measured per model, `HIDDEN` in the code), the cached share of it first, then the fresh tokens. Off, the prompt is told as Kiro counted it. An estimate of the caller's own request, Kiro having told no size, is left as it is. |
 | `importPage` | `KIRO_IMPORT_PAGE` | GitHub Pages | The import page 选择文件… opens: a copy of `import.html` served elsewhere (http or https). |
 | `importRelay` | `KIRO_IMPORT_RELAY` | `https://ntfy.sh` | The ntfy server the import page hands sealed accounts to when its browser is on another computer; `off` for none. |
 
@@ -220,6 +224,13 @@ native thinker's reasoning, told only in summary: told as output tokens, so
 the reply is billed as Kiro billed it. Priced back with the same prices, the
 usage comes to what Kiro metered: in a live five-turn conversation within
 0.01% (Sonnet 4.5: 41–47% of each later prompt cached; Opus 5.5: 72–86%).
+
+That prompt includes one Kiro puts there itself (`HIDDEN`: 4052 tokens for
+Sonnet 4.5 under kiro-cli, 740 under Kiro Web). With `dropHidden` on, the
+reported usage takes it out of the cached share first and then out of the
+fresh tokens, so the caller is not told those tokens. The cache is read
+from the credits of the whole prompt, this one included, and the tokens
+come out after that. `web` sends the request under the shorter prompt.
 
 The reply's tokens are its characters over the model's characters a token
 (calibrated, e.g. 4.59 for Sonnet 4.5, 3.34 for Opus 5.5's newer

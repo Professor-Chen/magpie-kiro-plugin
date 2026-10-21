@@ -89,7 +89,7 @@ magpie 在还有别的 Kiro 账号可以换时，会把 Claude 只有思考、�
 
 ## 设置
 
-写在 magpie 的 `plugins.json` 里该插件的 options（`{"spec": "…", "options": {"cacheRatio": 0.8}}`），或 OpenCode 的 `["…", {options}]`，否则用环境变量：
+写在 magpie 的 `plugins.json` 里该插件的 options（`{"spec": "…", "options": {"cacheRatio": 0.8}}`），或 OpenCode 的 `["…", {options}]`，否则用环境变量。`web` 和 `dropHidden` 另外是这个供应商设置里的两个开关（Kiro Web、去掉 Kiro 自带提示），下一个请求就生效：
 
 | 选项 | 环境变量 | 默认 | |
 | --- | --- | --- | --- |
@@ -107,6 +107,8 @@ magpie 在还有别的 Kiro 账号可以换时，会把 Claude 只有思考、�
 | `minInterval` | `KIRO_MIN_INTERVAL_MS` | `0` | 同一账号两次请求之间的最短间隔。 |
 | `toolDescriptionLimit` | `KIRO_TOOL_DESCRIPTION_LIMIT` | `9216` | 工具描述截断到这个长度。 |
 | `meter` | `KIRO_METER` | `on` | `on`：用量里的缓存 token，以及原生思考模型没有展示出来的推理，从 Kiro 的计量读取（见下）；`off`：用 `cacheRatio` 代替。 |
+| `web` | `KIRO_WEB` | `false` | `true` 时每条消息声明来自 Kiro Web（`KIRO_WEB`），而不是 kiro-cli。Kiro 自己加在前面的提示更短（Sonnet 4.5：740 个 token，而不是 4052）。 |
+| `dropHidden` | `KIRO_DROP_HIDDEN` | `false` | `true` 时，报出的提示 token 去掉 Kiro 自己的那段（各模型实测长度见代码里的 `HIDDEN`），先扣缓存读到的部分，再扣全新输入。默认按 Kiro 数到的整段报。Kiro 没给上下文、只能估算调用方请求时不扣。 |
 | `importPage` | `KIRO_IMPORT_PAGE` | GitHub Pages | 「选择文件…」打开的导入页：别处提供的 `import.html`（http 或 https）。 |
 | `importRelay` | `KIRO_IMPORT_RELAY` | `https://ntfy.sh` | 浏览器和 magpie 不在同一台机器时，导入页把封好的账号交给的 ntfy 服务器；`off` 表示不用。 |
 
@@ -117,6 +119,8 @@ Kiro 不给 token 数：流里的 `metadataEvent` 定义了带 `cacheReadInputTo
     credits = fresh × (prompt − cached) + cached_price × cached + output × reply
 
 所以 `cache_read_input_tokens` 是 Kiro 的缓存实际读到的，`input_tokens` 是其余。超过一次冷提示加回复的积分，是原生思考模型的推理，只以摘要出现，按输出 token 计入，这样回复的计费和 Kiro 的计量一致。用同一套单价折回去，用量和 Kiro 的计量相符：五轮实测对话误差在 0.01% 以内（Sonnet 4.5 后续每轮提示有 41–47% 命中缓存；Opus 5.5 为 72–86%）。
+
+这段提示里含有 Kiro 自己加的提示（`HIDDEN`：Sonnet 4.5 在 kiro-cli 下 4052 个 token，Kiro Web 下 740）。`dropHidden` 打开后，报出的用量先从缓存部分扣掉它，再从全新输入扣，调用方不再为这段付钱。缓存是按整段提示（含这段）从积分反推的，扣掉发生在反推之后。`web` 打开后请求走更短的那段。
 
 回复的 token 是字符数除以该模型每个 token 的字符数（标定值，例如 Sonnet 4.5 为 4.59，Opus 5.5 较新的分词器为 3.34），再零成本修正：对话的下一轮带着这条回复，Kiro 给出的准确上下文按它的 token 数增长。
 
