@@ -6,7 +6,7 @@
 
 - 一个字都没写出就被安全策略拒答的，改为 400 错误：`invalid_request_error`，`code: content_filter`，说明带拒答类别（例如 `BIO`）。magpie 认出是拒答，换下一个账号再问、不让这个账号休息，都拒了才把 400 交给客户端。new-api 不重试 400，记错误、退回预扣，不再扣费。此前它是 200 加 `stop_reason: refusal`，插件还按整段提示报用量，new-api 照常扣费，而 Kiro 对它计量为 0（实测：拒答 0 积分，同一段提示正常回答约 0.17）。服务器上 10-20 以来渠道 71 有 25 次这样的拒答被扣费，合计约 ¥2.13。
 - 写出过内容之后才拒的不变：连接已是 200，以 `stop_reason: refusal` 结束，按 Kiro 数到的用量报。
-- 直接接在 magpie 上的 Claude Code，拒答后收到的是这个 400 错误，不再是 `stop_reason: refusal`，所以它不会自己换备用模型。
+- 可选 `refusalReply`（`KIRO_REFUSAL_REPLY`，也是供应商设置里的开关「拒答按 Claude 原样返回」）：一个字都没写出就被拒答时，改为按 Anthropic 的样子回 200，不带正文，`stop_reason: refusal`，原因在 `stop_details`（`category` 小写，例如 `bio`），用量全为 0。magpie 先换别的账号，都拒了才原样交给客户端，直连 magpie 的 Claude Code 随即换自己的备用模型。默认关，即上面的 400。给 new-api 当上游的 magpie 保持关，Claude Code 直连的 magpie 打开。
 - 更正 custom.13 的说法：还没开始思考就拒答的此前并不是失败状态，而是 200 加 `stop_reason: refusal`，预扣不会退回。
 - 测试：开关测试换掉的 `fetch` 在每个测试后还原，后面导入页的测试不再被它截走。
 

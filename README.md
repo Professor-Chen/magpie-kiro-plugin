@@ -60,7 +60,12 @@ Kiro 没有 OpenCode 能直接说的 API。模型按 Anthropic Messages（`@ai-s
   - 用量到顶 → 429
   - 限流 → “rate limited”
 
-magpie 在还有别的 Kiro 账号可以换时，会把 Claude 只有思考、还没有正文的流压住，外面只看到 `: keepalive`，直到正文出现。本插件在思考块已经打开、第一段思考写出之后，发一帧 `response.done`。magpie 把这帧当成正文，于是把思考放行。Anthropic 客户端不认识这个事件类型就跳过，所以它不会变成思考、正文或工具调用。new-api 把同一条流转成 OpenAI Chat 时丢掉它。一个字都没写出就被安全策略拒答的，是 400 错误（`invalid_request_error`，`code: content_filter`）。magpie 认出这是拒答，先换别的账号再问，都拒了才把 400 和拒答说明交给客户端；new-api 不重试这个状态，记一条错误并退回预扣。写出过内容之后才拒的，连接已是 200，以 `stop_reason: "refusal"` 结束，按 Kiro 数到的用量结算。
+magpie 在还有别的 Kiro 账号可以换时，会把 Claude 只有思考、还没有正文的流压住，外面只看到 `: keepalive`，直到正文出现。本插件在思考块已经打开、第一段思考写出之后，发一帧 `response.done`。magpie 把这帧当成正文，于是把思考放行。Anthropic 客户端不认识这个事件类型就跳过，所以它不会变成思考、正文或工具调用。new-api 把同一条流转成 OpenAI Chat 时丢掉它。一个字都没写出就被安全策略拒答时，按 `refusalReply` 回：
+
+- 关（默认，new-api 用）：400 错误（`invalid_request_error`，`code: content_filter`）。magpie 认出这是拒答，先换别的账号再问，都拒了才把 400 和拒答说明交给客户端；new-api 不重试这个状态，记一条错误并退回预扣。
+- 开（Claude Code 直连 magpie 用）：按 Anthropic 的样子回 200，不带正文，`stop_reason: "refusal"`，原因在 `stop_details`（例如 `{"type":"refusal","category":"bio",…}`），用量全为 0。magpie 同样先换别的账号，都拒了才原样交给 Claude Code，Claude Code 随即换它自己的备用模型。
+
+两种接法用的是同一个插件、同一个开关，所以一个 magpie 只能选一种：给 new-api 当上游的 magpie 关着，自己的 Claude Code 直连的 magpie 打开。写出过内容之后才拒的，两种都一样：连接已是 200，以 `stop_reason: "refusal"` 结束，按 Kiro 数到的用量结算。
 
 ## 模型
 
@@ -89,7 +94,7 @@ magpie 在还有别的 Kiro 账号可以换时，会把 Claude 只有思考、�
 
 ## 设置
 
-写在 magpie 的 `plugins.json` 里该插件的 options（`{"spec": "…", "options": {"cacheRatio": 0.8}}`），或 OpenCode 的 `["…", {options}]`，否则用环境变量。`web` 和 `dropHidden` 另外是这个供应商设置里的两个开关（Kiro Web、去掉 Kiro 自带提示），下一个请求就生效：
+写在 magpie 的 `plugins.json` 里该插件的 options（`{"spec": "…", "options": {"cacheRatio": 0.8}}`），或 OpenCode 的 `["…", {options}]`，否则用环境变量。`web`、`dropHidden` 和 `refusalReply` 另外是这个供应商设置里的开关（Kiro Web、去掉 Kiro 自带提示、拒答按 Claude 原样返回），下一个请求就生效：
 
 | 选项 | 环境变量 | 默认 | |
 | --- | --- | --- | --- |
@@ -108,6 +113,7 @@ magpie 在还有别的 Kiro 账号可以换时，会把 Claude 只有思考、�
 | `toolDescriptionLimit` | `KIRO_TOOL_DESCRIPTION_LIMIT` | `9216` | 工具描述截断到这个长度。 |
 | `meter` | `KIRO_METER` | `on` | `on`：用量里的缓存 token，以及原生思考模型没有展示出来的推理，从 Kiro 的计量读取（见下）；`off`：用 `cacheRatio` 代替。 |
 | `web` | `KIRO_WEB` | `false` | `true` 时每条消息声明来自 Kiro Web（`KIRO_WEB`），而不是 kiro-cli。Kiro 自己加在前面的提示更短（Sonnet 4.5：740 个 token，而不是 4052）。 |
+| `refusalReply` | `KIRO_REFUSAL_REPLY` | `false` | 一个字都没写出就被拒答时怎么回，见下。`false`：400 报错，给 new-api 用；`true`：按 Anthropic 的样子回 200 和 `stop_reason: "refusal"`，给直连 magpie 的 Claude Code 用。 |
 | `dropHidden` | `KIRO_DROP_HIDDEN` | `false` | `true` 时，报出的提示 token 去掉 Kiro 自己的那段（各模型实测长度见代码里的 `HIDDEN`），先扣缓存读到的部分，再扣全新输入。默认按 Kiro 数到的整段报。Kiro 没给上下文、只能估算调用方请求时不扣。 |
 | `importPage` | `KIRO_IMPORT_PAGE` | GitHub Pages | 「选择文件…」打开的导入页：别处提供的 `import.html`（http 或 https）。 |
 | `importRelay` | `KIRO_IMPORT_RELAY` | `https://ntfy.sh` | 浏览器和 magpie 不在同一台机器时，导入页把封好的账号交给的 ntfy 服务器；`off` 表示不用。 |
@@ -126,7 +132,7 @@ Kiro 不给 token 数：流里的 `metadataEvent` 定义了带 `cacheReadInputTo
 
 标定结果：Kiro 把 Claude 的缓存 token 按全新 token 的 0.526 计量（Opus 和 Sonnet 5.5 为 0.266），GPT-5.6、DeepSeek、MiniMax、GLM 则完全不缓存。缓存由 Kiro 自己决定：插件的缓存点、位置和对话 id 都改变不了。
 
-拒答（Kiro 的安全过滤：`stopDetails.refusal`，例如 `BIO`）不当成空回复再试一次。一个字都没写出就被拒的，回 400：`{"type":"error","error":{"type":"invalid_request_error","code":"content_filter","message":"…（BIO）"}}`，Kiro 对它计量为 0（实测：同一段提示正常回答约 0.17 积分）。已经写出内容后才拒的，以 `stop_reason: "refusal"` 结束。
+拒答（Kiro 的安全过滤：`stopDetails.refusal`，例如 `BIO`）不当成空回复再试一次。一个字都没写出就被拒的，默认回 400：`{"type":"error","error":{"type":"invalid_request_error","code":"content_filter","message":"…（BIO）"}}`；`refusalReply` 打开时回 200、`stop_reason: "refusal"` 和 `stop_details`。Kiro 对它计量为 0（实测：同一段提示正常回答约 0.17 积分），所以两种都不计用量。已经写出内容后才拒的，以 `stop_reason: "refusal"` 结束。
 
 思考：每个力度有自己的预算（`max` 高于 `xhigh`）。调用方没指定力度时用它的 `budget_tokens`。`thinking: {type: "disabled"}` 不请求思考。
 

@@ -62,9 +62,9 @@ const SIGN_IN_TIMEOUT = 10 * 60 * 1000
 
 // The plugin's settings, from its entry's options in magpie's plugins.json
 // ({"spec": "…", "options": {"cacheRatio": 0.8}}) or OpenCode's
-// ["…", {options}], else KIRO_* environment variables. web and dropHidden
-// are also switches in the provider's editor (auth.options, read on the
-// next request):
+// ["…", {options}], else KIRO_* environment variables. web, dropHidden and
+// refusalReply are also switches in the provider's editor (auth.options,
+// read on the next request):
 //   - cacheRatio (KIRO_CACHE_RATIO, 0–1): the share of the prompt reported as
 //     read from the cache when Kiro reports none, as a relay's billing and
 //     Claude Code's display read it; 0, the default, reports none
@@ -105,9 +105,15 @@ const SIGN_IN_TIMEOUT = 10 * 60 * 1000
 //     Kiro's own prompt (HIDDEN), the cache's share of them first; off by
 //     default, the prompt told as Kiro counted it. An estimate of the
 //     caller's own request, Kiro having told no size, is left as it is
+//   - refusalReply (KIRO_REFUSAL_REPLY): a refusal before any of the reply
+//     is a 200 as Anthropic answers one, nothing said, stop_reason
+//     "refusal" and its stop_details, its usage none: magpie asks the next
+//     account, then hands it back as it is, and Claude Code on magpie
+//     switches to its fallback model. Off by default, a 400
+//     (refusedBefore), for new-api to tell the caller and bill nothing
 const DEFAULTS = { cacheRatio: 0, fingerprint: "ide", kiroVersion: "0.9.2", nodeVersion: "22.21.1", systemVersion: "",
   endpoint: "kiro", retries: 2, thinkingMin: 1024, thinkingMax: 64000, budgets: "", adaptive: false, effortField: "auto",
-  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", web: false, dropHidden: false, importPage: "", importRelay: "" }
+  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", web: false, dropHidden: false, refusalReply: false, importPage: "", importRelay: "" }
 const cfg = { ...DEFAULTS }
 // BUDGETS are each effort's thinking budget (xhigh its own level: #120)
 const BASE_BUDGETS = { low: 10000, medium: 20000, high: 30000, xhigh: 50000, max: 64000 }
@@ -134,6 +140,7 @@ function configure(o = {}) {
   cfg.meter = String(pick("meter", "KIRO_METER")).toLowerCase() === "off" ? "off" : "on"
   cfg.web = bool(pick("web", "KIRO_WEB"), false)
   cfg.dropHidden = bool(pick("dropHidden", "KIRO_DROP_HIDDEN"), false)
+  cfg.refusalReply = bool(pick("refusalReply", "KIRO_REFUSAL_REPLY"), false)
   const ip = String(pick("importPage", "KIRO_IMPORT_PAGE"))
   cfg.importPage = /^https?:\/\//i.test(ip) ? ip : IMPORT_PAGE
   // where the import page hands the accounts over when its browser can't
@@ -1593,10 +1600,13 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
     yield { kind: "error", text: failed }
     return
   }
-  // refused before a word: a failure, its status a refusal's (refusedBefore),
-  // for a relay to tell the caller and bill nothing, as Kiro meters nothing
-  // for it (live: 0 credits where the same prompt answered cost 0.17)
-  if (refusal && !said) {
+  // refused before a word, which Kiro meters nothing for (live: 0 credits
+  // where the same prompt answered cost 0.17): a failure, its status a
+  // refusal's (refusedBefore), for a relay to tell the caller and bill
+  // nothing; or (refusalReply) Anthropic's own answer, nothing said and
+  // the refusal in its stop_details, told as no usage
+  const free = !!refusal && !said && cfg.refusalReply
+  if (refusal && !said && !free) {
     const why = String(refusal.explanation || "The model declined to answer.")
     yield { kind: "error", text: why + (refusal.category ? ` (${refusal.category})` : ""), refused: true }
     return
@@ -1627,13 +1637,21 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
   // asked (withoutHidden). The estimate above is the caller's request
   // alone, so it is left
   if (kiroCounted) withoutHidden(usage, model)
+  if (free) for (const k of Object.keys(usage)) usage[k] = 0
   // a plain reply (no call, no thought) is kept for the next turn to learn
   if (req && exact && !tools && !thought) remember(req, model, exact, spokenChars)
   let reason = "end_turn"
   if (tools > 0) reason = "tool_use"
   else if (/^max_tokens$/i.test(stop)) reason = "max_tokens"
   else if (refusal || /^content_filtered$/i.test(stop)) reason = "refusal"
-  yield { kind: "stop", reason, usage }
+  if (!free) {
+    yield { kind: "stop", reason, usage }
+    return
+  }
+  // as Anthropic says it: its category lowercase ("bio"), else none
+  const details = { type: "refusal", category: refusal.category ? String(refusal.category).toLowerCase() : null,
+    explanation: String(refusal.explanation || "The model declined to answer.") }
+  yield { kind: "stop", reason, usage, details, free }
 }
 
 // finished is the message's blocks with each call's arguments read.
@@ -1918,7 +1936,7 @@ async function reply(it, model, stream, names = new Map(), estimate = 0) {
           stop_sequence: null, usage: anthropicUsage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) })
       } else if (e.kind === "stop") {
         return Response.json({ id, type: "message", role: "assistant", model, content: finished(content), stop_reason: e.reason, stop_sequence: null,
-          usage: anthropicUsage(e.usage) })
+          ...(e.details ? { stop_details: e.details } : {}), usage: anthropicUsage(e.usage) })
       }
     }
     return errorResponse(502, "the reply ended before it was complete")
@@ -1940,9 +1958,13 @@ async function reply(it, model, stream, names = new Map(), estimate = 0) {
     async pull(ctl) {
       if (!started) {
         started = true
-        const start = withCache({ input: estimate, output: 0, cacheRead: 0, cacheWrite: 0 })
+        // a refusal told as no usage starts at none too: magpie keeps the
+        // start's count when the end's is 0
+        const free = !!head.value?.free
+        const start = free ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+          : withCache({ input: estimate, output: 0, cacheRead: 0, cacheWrite: 0 })
         ctl.enqueue(sse("message_start", { message: { id, type: "message", role: "assistant", model, content: [], stop_reason: null,
-          stop_sequence: null, usage: { ...anthropicUsage(start), output_tokens: 1 } } }))
+          stop_sequence: null, usage: { ...anthropicUsage(start), output_tokens: free ? 0 : 1 } } }))
         return
       }
       const close = () => {
@@ -2011,7 +2033,8 @@ async function reply(it, model, stream, names = new Map(), estimate = 0) {
           return ctl.close()
         case "stop":
           close()
-          ctl.enqueue(sse("message_delta", { delta: { stop_reason: e.reason, stop_sequence: null }, usage: anthropicUsage(e.usage) }))
+          ctl.enqueue(sse("message_delta", { delta: { stop_reason: e.reason, stop_sequence: null, ...(e.details ? { stop_details: e.details } : {}) },
+            usage: anthropicUsage(e.usage) }))
           ctl.enqueue(sse("message_stop", {}))
           return ctl.close()
       }
@@ -2641,6 +2664,8 @@ export async function KiroAuthPlugin({ client, magpie } = {}, options = {}) {
           description: "每条消息声明来自 Kiro Web，Kiro 加在前面的提示更短。Sonnet 4.5 是 740 个 token，不是 kiro-cli 的 4052。" },
         { key: "drop-hidden", label: "去掉 Kiro 自带提示", default: cfg.dropHidden,
           description: "报出的用量去掉 Kiro 自己加的那段提示，先从缓存扣，再从全新输入扣。回复的 token 不变。Kiro 没给出上下文大小时不扣。" },
+        { key: "refusal-reply", label: "拒答按 Claude 原样返回", default: cfg.refusalReply,
+          description: "一个字都没写出就被拒答时，按 Anthropic 的样子回 200：不带正文，stop_reason: refusal，原因在 stop_details，用量为 0。Claude Code 直连 magpie 时会换备用模型。关着是 400 报错，new-api 记错误、不扣费。" },
       ],
       // magpie renews a sign-in kept here LEAD_MS before its end, once for
       // the account, before its requests, models and usage ask for it; the
@@ -2673,8 +2698,10 @@ export async function KiroAuthPlugin({ client, magpie } = {}, options = {}) {
             }
             const web = switched("web")
             const drop = switched("drop-hidden")
+            const reply = switched("refusal-reply")
             if (web !== null) cfg.web = web
             if (drop !== null) cfg.dropHidden = drop
+            if (reply !== null) cfg.refusalReply = reply
             return generate(creds, (await getAuth()) ?? auth, req, init.signal)
           },
         }

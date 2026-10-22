@@ -180,9 +180,10 @@ at once rather than at the first request.
 
 Set as the plugin's options in magpie's `plugins.json`
 (`{"spec": "…", "options": {"cacheRatio": 0.8}}`) or OpenCode's
-`["…", {options}]`, else as environment variables. `web` and `dropHidden`
-are also two switches in this provider's settings (Kiro Web, and dropping
-Kiro's own prompt), read on the next request:
+`["…", {options}]`, else as environment variables. `web`, `dropHidden`
+and `refusalReply` are also switches in this provider's settings (Kiro
+Web, dropping Kiro's own prompt, and answering a refusal as Claude does),
+read on the next request:
 
 | Option | Env | Default | |
 | --- | --- | --- | --- |
@@ -201,6 +202,7 @@ Kiro's own prompt), read on the next request:
 | `toolDescriptionLimit` | `KIRO_TOOL_DESCRIPTION_LIMIT` | `9216` | A tool's description is cut at this. |
 | `meter` | `KIRO_METER` | `on` | `on`: the usage's cache tokens, and a native thinker's unshown reasoning, are read from what Kiro metered (below); `off`: `cacheRatio` stands in. |
 | `web` | `KIRO_WEB` | `false` | `true`: each message says it comes from Kiro Web (`KIRO_WEB`) rather than kiro-cli. Kiro puts a shorter prompt of its own in front (Sonnet 4.5: 740 tokens rather than 4052). |
+| `refusalReply` | `KIRO_REFUSAL_REPLY` | `false` | How a refusal before a word is answered, see below. `false`: a 400, for new-api; `true`: a 200 as Anthropic answers one, `stop_reason: "refusal"`, for Claude Code talking to magpie directly. |
 | `dropHidden` | `KIRO_DROP_HIDDEN` | `false` | `true`: the reported prompt omits Kiro's own prompt (measured per model, `HIDDEN` in the code), the cached share of it first, then the fresh tokens. Off, the prompt is told as Kiro counted it. An estimate of the caller's own request, Kiro having told no size, is left as it is. |
 | `importPage` | `KIRO_IMPORT_PAGE` | GitHub Pages | The import page 选择文件… opens: a copy of `import.html` served elsewhere (http or https). |
 | `importRelay` | `KIRO_IMPORT_RELAY` | `https://ntfy.sh` | The ntfy server the import page hands sealed accounts to when its browser is on another computer; `off` for none. |
@@ -243,10 +245,13 @@ DeepSeek, MiniMax or GLM. Kiro caches by itself: the plugin's cache points,
 their place, and the conversation id change nothing.
 
 A refusal (Kiro's safety filter: `stopDetails.refusal`, e.g. `BIO`) is
-not tried again as an empty reply. Refused before a word, it is a 400,
-`{"type":"error","error":{"type":"invalid_request_error","code":"content_filter","message":"… (BIO)"}}`,
-which Kiro meters nothing for (live: 0 credits, where the same prompt
-answered cost 0.17). Refused after the reply began, it ends with
+not tried again as an empty reply. Refused before a word, it is by
+default a 400,
+`{"type":"error","error":{"type":"invalid_request_error","code":"content_filter","message":"… (BIO)"}}`;
+with `refusalReply`, a 200 as Anthropic answers one, nothing said,
+`stop_reason: "refusal"` and `stop_details`. Kiro meters nothing for it
+(live: 0 credits, where the same prompt answered cost 0.17), so neither
+tells any usage. Refused after the reply began, it ends with
 `stop_reason: "refusal"`.
 
 Thinking: each effort is its own budget (`max` is past `xhigh`), the
@@ -296,12 +301,18 @@ plugin sends one `response.done` event. magpie treats that as content and
 lets the thinking through. An Anthropic client skips an event type it
 does not know, so the frame is not thinking, text, or a tool call.
 new-api drops it when converting the same stream to OpenAI Chat. A
-refusal before a word is a 400 with `code: content_filter`: magpie reads it
-as a refusal, asks the next account, and once none is left hands the 400
-and the refusal's words on; new-api doesn't retry that status, logs an
-error and returns the pre-charge. One after the reply began ends a 200
-with `stop_reason: "refusal"`, billed as Kiro counted it. See
-[CHANGELOG.md](CHANGELOG.md).
+refusal before a word is, by default, a 400 with `code: content_filter`:
+magpie reads it as a refusal, asks the next account, and once none is
+left hands the 400 and the refusal's words on; new-api doesn't retry that
+status, logs an error and returns the pre-charge. With `refusalReply`
+(`KIRO_REFUSAL_REPLY`, also a switch in the provider's editor) it is
+Anthropic's own answer instead, a 200 with nothing said, `stop_reason:
+"refusal"`, `stop_details` and no usage, which magpie hands back once no
+account is left and Claude Code answers by switching to its fallback
+model. One plugin, one switch: a magpie behind new-api keeps it off, one
+Claude Code talks to directly turns it on. A refusal after the reply
+began ends a 200 with `stop_reason: "refusal"` either way, billed as Kiro
+counted it. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Not included
 

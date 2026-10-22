@@ -184,6 +184,7 @@ test("the provider's editor has switches, and the next request reads them", asyn
   expect(hooks.auth.options.map((o) => [o.key, o.label, o.default])).toEqual([
     ["web", "Kiro Web", false],
     ["drop-hidden", "去掉 Kiro 自带提示", false],
+    ["refusal-reply", "拒答按 Claude 原样返回", false],
   ])
   expect(hooks.auth.options.every((o) => o.description)).toBe(true)
   const auth = { type: "oauth", access: "test-access", refresh: "test-refresh", expires: Date.now() + 3600_000, method: "social",
@@ -198,11 +199,14 @@ test("the provider's editor has switches, and the next request reads them", asyn
   await ask()
   expect(origins).toEqual(["KIRO_CLI"])
   expect(_internal.cfg.dropHidden).toBe(false)
+  expect(_internal.cfg.refusalReply).toBe(false)
   chosen.web = true
   chosen["drop-hidden"] = true
+  chosen["refusal-reply"] = true
   await ask()
   expect(origins).toEqual(["KIRO_CLI", "KIRO_WEB"])
   expect(_internal.cfg.dropHidden).toBe(true)
+  expect(_internal.cfg.refusalReply).toBe(true)
 })
 
 test("web says each message comes from Kiro Web", () => {
@@ -266,6 +270,33 @@ test("a refusal before a word is a 400 the safety filter's, not an answer or a r
   const res = await _internal.generate(creds, {}, { model: "claude-x", messages: [{ role: "user", content: "hi" }], stream: true })
   expect(res.status).toBe(400)
   expect(n).toBe(1)
+})
+
+test("refusalReply answers a refusal before a word as Anthropic does: a 200, nothing said, stop_details, no usage", async () => {
+  const model = "claude-sonnet-4.5"
+  PRICES[model] = P
+  _internal.windowsOf().set(model, 200000)
+  configure({ refusalReply: true, dropHidden: true })
+  const refused = ev("metadataEvent", { stopReason: "CONTENT_FILTERED", stopDetails: { refusal: { category: "BIO", explanation: "The selected model cannot continue this conversation." } } })
+  const frames = () => body(refused, ev("contextUsageEvent", { contextUsagePercentage: 5 }), ev("meteringEvent", { unit: "credit", usage: 0 }))
+  const details = { type: "refusal", category: "bio", explanation: "The selected model cannot continue this conversation." }
+  const zero = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  const evs = await all(events(frames(), model, null, 100))
+  expect(evs).toEqual([{ kind: "stop", reason: "refusal", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, details, free: true }])
+  const whole = await reply(events(frames(), model, null, 100), model, false)
+  expect(whole.status).toBe(200)
+  expect(await whole.json()).toMatchObject({ content: [], stop_reason: "refusal", stop_details: details, usage: zero })
+  // streamed: no block, the start's usage none too, as magpie keeps it when the end's is 0
+  const streamed = await sseOf(await reply(events(frames(), model, null, 100), model, true, new Map(), 100))
+  expect(streamed.map((e) => e.event)).toEqual(["message_start", "message_delta", "message_stop"])
+  expect(streamed[0].data.message.usage).toEqual(zero)
+  expect(streamed[1].data).toMatchObject({ delta: { stop_reason: "refusal", stop_details: details }, usage: zero })
+  // with no category, none
+  const bare = ev("metadataEvent", { stopReason: "CONTENT_FILTERED", stopDetails: { refusal: { explanation: "No." } } })
+  expect((await all(events(body(bare), model, null, 100))).at(-1).details).toEqual({ type: "refusal", category: null, explanation: "No." })
+  // off again: the 400
+  configure({ refusalReply: false })
+  expect((await reply(events(frames(), model, null, 100), model, true)).status).toBe(400)
 })
 
 test("a refusal after the reply began ends it as a refusal, told as Kiro counted it", async () => {
