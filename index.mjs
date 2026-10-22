@@ -1593,14 +1593,13 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
     yield { kind: "error", text: failed }
     return
   }
-  // refused before a word, Kiro metered nothing (live: 0 credits where the
-  // same prompt answered cost 0.17): told as no usage, so a relay billing
-  // what is told charges nothing for it. free goes with the text, which a
-  // stream's message_start waits for
-  const free = !!refusal && !said && !(credits > 0)
+  // refused before a word: a failure, its status a refusal's (refusedBefore),
+  // for a relay to tell the caller and bill nothing, as Kiro meters nothing
+  // for it (live: 0 credits where the same prompt answered cost 0.17)
   if (refusal && !said) {
     const why = String(refusal.explanation || "The model declined to answer.")
-    yield { kind: "text", text: why + (refusal.category ? ` (${refusal.category})` : ""), free }
+    yield { kind: "error", text: why + (refusal.category ? ` (${refusal.category})` : ""), refused: true }
+    return
   }
   // a 200 that said nothing at all: a failure on Kiro's side, retryable
   if (!any) {
@@ -1628,7 +1627,6 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
   // asked (withoutHidden). The estimate above is the caller's request
   // alone, so it is left
   if (kiroCounted) withoutHidden(usage, model)
-  if (free) for (const k of Object.keys(usage)) usage[k] = 0
   // a plain reply (no call, no thought) is kept for the next turn to learn
   if (req && exact && !tools && !thought) remember(req, model, exact, spokenChars)
   let reason = "end_turn"
@@ -1873,6 +1871,18 @@ const QUOTA_WORDS = /quota|insufficient|balance|credit|billing|exceeded|rate.?li
 // else a 502.
 const failedBefore = (text) => errorResponse(QUOTA_WORDS.test(text) ? 429 : 502, text)
 
+// refusedBefore is a refusal with nothing said: a 400 whose code is a safety
+// filter's, as OpenAI's content_filter. magpie reads that code as a refusal
+// (policyRefusal), asks the next account without setting this one aside,
+// and once none is left says it at a 400, which new-api neither retries nor
+// bills, handing back what it held for the request.
+const refusedBefore = (text) =>
+  new Response(JSON.stringify({ type: "error", error: { type: "invalid_request_error", code: "content_filter", message: text } }), {
+    status: 400,
+    headers: { "Content-Type": "application/json", "X-Magpie-Sign-In": "kept" },
+  })
+const failedAs = (e) => (e.refused ? refusedBefore(e.text) : failedBefore(e.text))
+
 const PING = Symbol("ping")
 let PING_MS = 15_000
 
@@ -1903,7 +1913,7 @@ async function reply(it, model, stream, names = new Map(), estimate = 0) {
         if (last?.type === "tool_use") last.input += e.text
       } else if (e.kind === "error") {
         // with none of the answer said, a status; else what was said
-        if (!content.length) return failedBefore(e.text)
+        if (!content.length) return failedAs(e)
         return Response.json({ id, type: "message", role: "assistant", model, content: finished(content), stop_reason: "end_turn",
           stop_sequence: null, usage: anthropicUsage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) })
       } else if (e.kind === "stop") {
@@ -1916,7 +1926,7 @@ async function reply(it, model, stream, names = new Map(), estimate = 0) {
 
   // an error before any of the answer is a status, as the built-in's
   const head = await it.next()
-  if (head.value?.kind === "error") return failedBefore(head.value.text)
+  if (head.value?.kind === "error") return failedAs(head.value)
   let pending = head
 
   const enc = new TextEncoder()
@@ -1930,11 +1940,7 @@ async function reply(it, model, stream, names = new Map(), estimate = 0) {
     async pull(ctl) {
       if (!started) {
         started = true
-        // a refusal Kiro charged nothing starts at none: magpie and new-api
-        // keep the start's count when the end's is 0. Its output_tokens 1
-        // stays, as new-api estimates the whole prompt for a reply of 0
-        const start = head.value?.free ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
-          : withCache({ input: estimate, output: 0, cacheRead: 0, cacheWrite: 0 })
+        const start = withCache({ input: estimate, output: 0, cacheRead: 0, cacheWrite: 0 })
         ctl.enqueue(sse("message_start", { message: { id, type: "message", role: "assistant", model, content: [], stop_reason: null,
           stop_sequence: null, usage: { ...anthropicUsage(start), output_tokens: 1 } } }))
         return

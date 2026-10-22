@@ -243,10 +243,11 @@ DeepSeek, MiniMax or GLM. Kiro caches by itself: the plugin's cache points,
 their place, and the conversation id change nothing.
 
 A refusal (Kiro's safety filter: `stopDetails.refusal`, e.g. `BIO`) is
-answered as one: its explanation as the text, `stop_reason: "refusal"`,
-rather than tried again as an empty reply. Refused before a word, Kiro
-meters nothing (live: 0 credits, where the same prompt answered cost
-0.17), so the usage told is all zeros too.
+not tried again as an empty reply. Refused before a word, it is a 400,
+`{"type":"error","error":{"type":"invalid_request_error","code":"content_filter","message":"… (BIO)"}}`,
+which Kiro meters nothing for (live: 0 credits, where the same prompt
+answered cost 0.17). Refused after the reply began, it ends with
+`stop_reason: "refusal"`.
 
 Thinking: each effort is its own budget (`max` is past `xhigh`), the
 caller's `budget_tokens` is used when it names no effort, and
@@ -295,11 +296,11 @@ plugin sends one `response.done` event. magpie treats that as content and
 lets the thinking through. An Anthropic client skips an event type it
 does not know, so the frame is not thinking, text, or a tool call.
 new-api drops it when converting the same stream to OpenAI Chat. A
-refusal comes back as `stop_reason: "refusal"` on a 200, and new-api
-bills the usage it was given: none for one refused before a word that
-Kiro metered nothing (a stream's `message_start` still says 1 output
-token, as new-api estimates the prompt for a reply of 0), as Kiro counted
-it for one refused later. See
+refusal before a word is a 400 with `code: content_filter`: magpie reads it
+as a refusal, asks the next account, and once none is left hands the 400
+and the refusal's words on; new-api doesn't retry that status, logs an
+error and returns the pre-charge. One after the reply began ends a 200
+with `stop_reason: "refusal"`, billed as Kiro counted it. See
 [CHANGELOG.md](CHANGELOG.md).
 
 ## Not included

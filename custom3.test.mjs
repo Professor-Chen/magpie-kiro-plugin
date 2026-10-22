@@ -248,48 +248,39 @@ test("the first thinking delta releases magpie's hold once, and a reply without 
   expect((await sseOf(plain)).some((e) => e.event === "response.done")).toBe(false)
 })
 
-test("a refusal is an answer with stop_reason refusal, not a retried failure", async () => {
-  const refused = ev("metadataEvent", { stopDetails: { refusal: { category: "BIO", explanation: "The selected model cannot continue this conversation." } } })
-  const evs = await all(events(body(refused, ev("contextUsageEvent", { contextUsagePercentage: 2 })), "claude-x", null, 100))
-  expect(evs.some((e) => e.kind === "error")).toBe(false)
-  expect(evs.filter((e) => e.kind === "text").map((e) => e.text).join("")).toContain("(BIO)")
-  expect(evs.at(-1)).toMatchObject({ kind: "stop", reason: "refusal" })
-  const res = await reply(events(body(refused), "claude-x", null, 100), "claude-x", false)
-  expect(res.status).toBe(200)
-  expect((await res.json()).stop_reason).toBe("refusal")
+test("a refusal before a word is a 400 the safety filter's, not an answer or a retried failure", async () => {
+  const refused = ev("metadataEvent", { stopReason: "CONTENT_FILTERED", stopDetails: { refusal: { category: "BIO", explanation: "The selected model cannot continue this conversation." } } })
+  const evs = await all(events(body(refused, ev("contextUsageEvent", { contextUsagePercentage: 2 }), ev("meteringEvent", { unit: "credit", usage: 0 })), "claude-x", null, 100))
+  expect(evs).toEqual([{ kind: "error", text: "The selected model cannot continue this conversation. (BIO)", refused: true }])
+  for (const stream of [false, true]) {
+    const res = await reply(events(body(refused), "claude-x", null, 100), "claude-x", stream)
+    expect(res.status).toBe(400)
+    expect(res.headers.get("X-Magpie-Sign-In")).toBe("kept")
+    expect(await res.json()).toEqual({ type: "error", error: { type: "invalid_request_error", code: "content_filter",
+      message: "The selected model cannot continue this conversation. (BIO)" } })
+  }
+  // not tried again: an empty 200 is, a refusal isn't
+  let n = 0
+  globalThis.fetch = async () => (n++, new Response(body(refused), { status: 200 }))
+  const creds = async () => ({ token: "t", profile: "arn:aws:codewhisperer:us-east-1:1:profile/X", region: "us-east-1", machineId: "0".repeat(64) })
+  const res = await _internal.generate(creds, {}, { model: "claude-x", messages: [{ role: "user", content: "hi" }], stream: true })
+  expect(res.status).toBe(400)
+  expect(n).toBe(1)
 })
 
-test("a refusal before a word, Kiro metering nothing, is told as no usage", async () => {
+test("a refusal after the reply began ends it as a refusal, told as Kiro counted it", async () => {
   const model = "claude-sonnet-4.5"
   PRICES[model] = P
   _internal.windowsOf().set(model, 200000)
-  configure({ dropHidden: true })
   const refused = ev("metadataEvent", { stopReason: "CONTENT_FILTERED", stopDetails: { refusal: { category: "BIO", explanation: "The selected model cannot continue this conversation." } } })
-  const free = (await all(events(body(refused, ev("contextUsageEvent", { contextUsagePercentage: 5 }), ev("meteringEvent", { unit: "credit", usage: 0 })),
-    model, null, 100))).at(-1)
-  expect(free).toMatchObject({ kind: "stop", reason: "refusal", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })
-  // no metering at all, and only the caller's request estimated: none either
-  expect((await all(events(body(refused), model, null, 100))).at(-1).usage).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
-  // what Anthropic's client and a relay read: all zeros
-  const res = await reply(events(body(refused, ev("contextUsageEvent", { contextUsagePercentage: 5 })), model, null, 100), model, false)
-  expect((await res.json()).usage).toEqual({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
-  // streamed, the start too: a relay keeps the start's count when the end's is 0
-  const streamed = await sseOf(await reply(events(body(refused, ev("contextUsageEvent", { contextUsagePercentage: 5 })), model, null, 100), model, true, new Map(), 100))
-  expect(streamed.find((e) => e.event === "message_start").data.message.usage).toMatchObject({ input_tokens: 0, cache_read_input_tokens: 0 })
-  expect(streamed.find((e) => e.event === "message_delta").data.usage).toMatchObject({ input_tokens: 0, output_tokens: 0 })
-  expect(streamed.find((e) => e.event === "message_delta").data.delta.stop_reason).toBe("refusal")
-  // one Kiro charged starts at the estimate, as any reply does
-  const paid = await sseOf(await reply(events(body(refused, ev("contextUsageEvent", { contextUsagePercentage: 5 }),
-    ev("meteringEvent", { unit: "credit", usage: (4.1 * 10000) / 1e6 })), model, null, 100), model, true, new Map(), 100))
-  expect(paid.find((e) => e.event === "message_start").data.message.usage.input_tokens).toBe(100)
-  // refused after it had begun, or with credits metered: told as counted
   const late = (await all(events(body(ev("assistantResponseEvent", { content: "Sure, here" }), refused,
     ev("contextUsageEvent", { contextUsagePercentage: 5 }), ev("meteringEvent", { unit: "credit", usage: (4.1 * 10000 + 128 * 3) / 1e6 })), model, null, 100))).at(-1)
+  expect(late.kind).toBe("stop")
   expect(late.reason).toBe("refusal")
-  expect(late.usage.input + late.usage.cacheRead).toBe(10000 - HIDDEN[model].cli)
-  const charged = (await all(events(body(refused, ev("contextUsageEvent", { contextUsagePercentage: 5 }),
-    ev("meteringEvent", { unit: "credit", usage: (4.1 * 10000) / 1e6 })), model, null, 100))).at(-1)
-  expect(charged.usage.input + charged.usage.cacheRead).toBe(10000 - HIDDEN[model].cli)
+  expect(late.usage.input + late.usage.cacheRead).toBe(10000)
+  const res = await reply(events(body(ev("assistantResponseEvent", { content: "Sure, here" }), refused), model, null, 100), model, false)
+  expect(res.status).toBe(200)
+  expect((await res.json()).stop_reason).toBe("refusal")
 })
 
 // ---- learning a model's characters a token, from the next turn ----------------------
