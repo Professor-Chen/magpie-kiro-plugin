@@ -244,7 +244,9 @@ their place, and the conversation id change nothing.
 
 A refusal (Kiro's safety filter: `stopDetails.refusal`, e.g. `BIO`) is
 answered as one: its explanation as the text, `stop_reason: "refusal"`,
-rather than tried again as an empty reply.
+rather than tried again as an empty reply. Refused before a word, Kiro
+meters nothing (live: 0 credits, where the same prompt answered cost
+0.17), so the usage told is all zeros too.
 
 Thinking: each effort is its own budget (`max` is past `xhigh`), the
 caller's `budget_tokens` is used when it names no effort, and
@@ -293,10 +295,12 @@ plugin sends one `response.done` event. magpie treats that as content and
 lets the thinking through. An Anthropic client skips an event type it
 does not know, so the frame is not thinking, text, or a tool call.
 new-api drops it when converting the same stream to OpenAI Chat. A
-refusal after that still comes back as `stop_reason: "refusal"`. The
-connection is already a 200, so new-api bills the usage it was given.
-A refusal before any thinking is still a failed status, and the
-pre-charge is returned. See [CHANGELOG.md](CHANGELOG.md).
+refusal comes back as `stop_reason: "refusal"` on a 200, and new-api
+bills the usage it was given: none for one refused before a word that
+Kiro metered nothing (a stream's `message_start` still says 1 output
+token, as new-api estimates the prompt for a reply of 0), as Kiro counted
+it for one refused later. See
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Not included
 

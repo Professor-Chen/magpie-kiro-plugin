@@ -1593,9 +1593,14 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
     yield { kind: "error", text: failed }
     return
   }
+  // refused before a word, Kiro metered nothing (live: 0 credits where the
+  // same prompt answered cost 0.17): told as no usage, so a relay billing
+  // what is told charges nothing for it. free goes with the text, which a
+  // stream's message_start waits for
+  const free = !!refusal && !said && !(credits > 0)
   if (refusal && !said) {
     const why = String(refusal.explanation || "The model declined to answer.")
-    yield { kind: "text", text: why + (refusal.category ? ` (${refusal.category})` : "") }
+    yield { kind: "text", text: why + (refusal.category ? ` (${refusal.category})` : ""), free }
   }
   // a 200 that said nothing at all: a failure on Kiro's side, retryable
   if (!any) {
@@ -1623,6 +1628,7 @@ async function* events(body, model, budget, estimate = 0, known = null, req = nu
   // asked (withoutHidden). The estimate above is the caller's request
   // alone, so it is left
   if (kiroCounted) withoutHidden(usage, model)
+  if (free) for (const k of Object.keys(usage)) usage[k] = 0
   // a plain reply (no call, no thought) is kept for the next turn to learn
   if (req && exact && !tools && !thought) remember(req, model, exact, spokenChars)
   let reason = "end_turn"
@@ -1924,7 +1930,11 @@ async function reply(it, model, stream, names = new Map(), estimate = 0) {
     async pull(ctl) {
       if (!started) {
         started = true
-        const start = withCache({ input: estimate, output: 0, cacheRead: 0, cacheWrite: 0 })
+        // a refusal Kiro charged nothing starts at none: magpie and new-api
+        // keep the start's count when the end's is 0. Its output_tokens 1
+        // stays, as new-api estimates the whole prompt for a reply of 0
+        const start = head.value?.free ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+          : withCache({ input: estimate, output: 0, cacheRead: 0, cacheWrite: 0 })
         ctl.enqueue(sse("message_start", { message: { id, type: "message", role: "assistant", model, content: [], stop_reason: null,
           stop_sequence: null, usage: { ...anthropicUsage(start), output_tokens: 1 } } }))
         return
