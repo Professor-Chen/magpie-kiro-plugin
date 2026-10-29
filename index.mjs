@@ -750,7 +750,14 @@ function account(client) {
   }
   const creds = (auth, stale = false) =>
     locked(async () => {
-      const id = auth?.type === "api" ? "key:" + auth.key : "oauth:" + (auth?.source ?? "own")
+      // who the token belongs to. A sign-in kept here is named by its own
+      // account: named "own" for every one of them, a pool of accounts
+      // hands the last request's token to the next one, and the ones that
+      // never asked show the first one's "Invalid token".
+      const id =
+        auth?.type === "api"
+          ? "key:" + auth.key
+          : "oauth:" + (auth?.source ?? auth?.accountId ?? (auth?.refresh ? auth.refresh.slice(-12) : "own"))
       // what its owner holds now: it may have refreshed it, signed out, or
       // signed in to another account since
       let read = await credOf(auth)

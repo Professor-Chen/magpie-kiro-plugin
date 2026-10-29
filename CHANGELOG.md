@@ -2,6 +2,18 @@
 
 [English](README.en.md) · [简体中文](README.md)
 
+## 0.1.12-custom.18（2026-10-30）
+
+- 修一个会把账号池里别的号的 token 拿去用的 bug：`creds()` 用
+  `"oauth:" + (auth?.source ?? "own")` 当缓存键，而 magpie 里自己导入的账号
+  都没有 `source`，于是**十个账号共用一个 `oauth:own`**。`held` 只有一个槽，
+  并发时后一个请求拿到的可能是前一个账号的 token。
+  现象就是：池子里只有某个号的 token 失效，界面上却是**别的号**报
+  `暂时无法获取额度：Kiro: Invalid token (403)`，而且每次刷新页面报错的号还不一样。
+  现在缓存键按账号区分（`source` → `accountId` → refreshToken 末 12 位），
+  一个账号一个缓存槽。
+- 不影响单账号使用，只影响一个 provider 下挂多个账号（本次导入 8 个号后暴露）。
+
 ## 0.1.12-custom.17（2026-10-30）
 
 - 补上 GUI 开关：magpie 的供应商编辑器里现在有三个 “Plugin options”（`auth.options`），
