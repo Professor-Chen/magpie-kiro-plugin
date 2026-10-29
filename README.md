@@ -100,6 +100,12 @@ magpie 在还有别的 Kiro 账号可以换时，会把 Claude 只有思考、�
 | --- | --- | --- | --- |
 | `cacheRatio` | `KIRO_CACHE_RATIO` | `0` | 0–1：Kiro 没有报告缓存时，提示里算作 `cache_read_input_tokens` 的比例，其余是 `input_tokens`。Kiro 自己给了缓存数字时，以它为准。 |
 | `fingerprint` | `KIRO_FINGERPRINT` | `ide` | `ide`：Kiro IDE 的请求头（`aws-sdk-js/1.0.34 … KiroIDE-<version>-<machineId>`）；`cli`：kiro-cli 的，和以前一样。 |
+| `fp` | `KIRO_FP` | `safe` | 指纹总开关。`off`：完全回到旧行为（整台机器共用一个 machineId、不补 `Accept-Language`/`x-amz-date`、`amz-sdk-request` 仍是 `max=1`、不用账号代理）；`safe`：每个账号各自的设备身份和出口（推荐）；`full`：同 `safe`，TLS 伪装（curl-impersonate）留了接口但还没接，见 `curlBin`。 |
+| `fpDeviceId` | `KIRO_FP_DEVICE_ID` | 跟随 `fp` | 每个账号自己的 machineId（取账号自带的，否则按 refreshToken 派生）。关掉就回到"全机共用一个"，只有做对照测试时才关。 |
+| `fpProfile` | `KIRO_FP_PROFILE` | 跟随 `fp` | 版本、OS 标识、`Accept-Language` 按账号自洽，并把旧的 `0.9.2` 换成 `1.1.70`（显式设了 `KIRO_VERSION` 则听你的）。 |
+| `fpProxy` | `KIRO_FP_PROXY` | 跟随 `fp` | 账号自带 `proxyUrl` 就用它，`direct` 表示显式直连（绕过 magpie 的全局代理），没写则交给 magpie 选。 |
+| `fpKiroVersion` / `fpNodeVersion` / `fpSystemVersion` / `fpLocale` | `KIRO_FP_VERSION` / `KIRO_FP_NODE_VERSION` / `KIRO_FP_SYSTEM_VERSION` / `KIRO_FP_LOCALE` | 账号自带，否则 `1.1.70` / `22.21.1` / 本机 / `zh-CN` | 显式指定这套身份，优先级高于默认、低于账号自带的值。 |
+| `curlBin` | `KIRO_CURL_BIN` | 空 | `fp=full` 时打算用的 curl-impersonate 可执行文件（如 `curl_chrome116`）。现在填了也不生效，等 TLS 那层接上。 |
 | `kiroVersion` | `KIRO_VERSION` | `0.9.2` | 指纹里的 Kiro IDE 版本。 |
 | `nodeVersion` | `KIRO_NODE_VERSION` | `22.21.1` | |
 | `systemVersion` | `KIRO_SYSTEM_VERSION` | 本机系统（`win32#10.0.22631`） | |

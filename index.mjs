@@ -50,12 +50,18 @@ const IMPORT_RELAY = "https://ntfy.sh"
 // what the IDE asks AWS for
 const SCOPES = ["codewhisperer:completions", "codewhisperer:analysis", "codewhisperer:conversations",
   "codewhisperer:transformations", "codewhisperer:taskassist"]
-// how the IDE names itself to Kiro's auth service, and when refreshing
-const IDE_UA = "KiroIDE-1.1.70-" + createHash("sha256").update("magpie:" + hostname()).digest("hex")
+// how the IDE names itself to Kiro's auth service, and when refreshing; a
+// function so it reads the fingerprint the settings settled on, not the
+// module's defaults
+const ideUa = () => `KiroIDE-${fpFor(null).kiroVersion}-${machineIdOf(null)}`
 const DESKTOP_UA = "Kiro-Desktop/0.2.13 (darwin; arm64)"
 // refreshUA is who refreshes a sign-in with Google or GitHub: the IDE of
 // the fingerprint the account's requests carry, or Kiro Desktop's, as before
-const refreshUA = (c) => (cfg.fingerprint === "cli" ? DESKTOP_UA : `KiroIDE-${cfg.kiroVersion}-${machineIdOf(c)}`)
+const refreshUA = (c) => {
+  if (cfg.fingerprint === "cli") return DESKTOP_UA
+  const fp = fpFor(c)
+  return `KiroIDE-${fp.kiroVersion}-${fp.id}`
+}
 const SIGN_IN_TIMEOUT = 10 * 60 * 1000
 
 // ---- settings ------------------------------------------------------------------------
@@ -111,9 +117,17 @@ const SIGN_IN_TIMEOUT = 10 * 60 * 1000
 //     account, then hands it back as it is, and Claude Code on magpie
 //     switches to its fallback model. Off by default, a 400
 //     (refusedBefore), for new-api to tell the caller and bill nothing
+// fp is the fingerprint switch: "off" keeps the old behaviour exactly (one
+// shared machine id, no extra headers, no account proxy), "safe" gives each
+// account its own device identity and its own way out, "full" adds TLS
+// impersonation through curl-impersonate (KIRO_CURL_BIN). fpDeviceId,
+// fpProfile and fpProxy override one part of the tier: true on, false off,
+// null follows the tier.
 const DEFAULTS = { cacheRatio: 0, fingerprint: "ide", kiroVersion: "0.9.2", nodeVersion: "22.21.1", systemVersion: "",
   endpoint: "kiro", retries: 2, thinkingMin: 1024, thinkingMax: 64000, budgets: "", adaptive: false, effortField: "auto",
-  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", web: false, dropHidden: false, refusalReply: false, importPage: "", importRelay: "" }
+  minInterval: 0, toolDescriptionLimit: 9216, meter: "on", web: false, dropHidden: false, refusalReply: false, importPage: "", importRelay: "",
+  fp: "safe", fpDeviceId: null, fpProfile: null, fpProxy: null, fpKiroVersion: "", fpNodeVersion: "", fpSystemVersion: "",
+  fpLocale: "", curlBin: "" }
 const cfg = { ...DEFAULTS }
 // BUDGETS are each effort's thinking budget (xhigh its own level: #120)
 const BASE_BUDGETS = { low: 10000, medium: 20000, high: 30000, xhigh: 50000, max: 64000 }
@@ -139,6 +153,25 @@ function configure(o = {}) {
   cfg.toolDescriptionLimit = Math.trunc(clamp(pick("toolDescriptionLimit", "KIRO_TOOL_DESCRIPTION_LIMIT"), 256, 100000, 9216))
   cfg.meter = String(pick("meter", "KIRO_METER")).toLowerCase() === "off" ? "off" : "on"
   cfg.web = bool(pick("web", "KIRO_WEB"), false)
+  // the fingerprint switch: a tier, and one part of it overridden by name
+  const tier = String(pick("fp", "KIRO_FP") ?? "safe").toLowerCase()
+  cfg.fp = tier === "off" || tier === "full" ? tier : "safe"
+  const fpOn = (cfg.fpOn = cfg.fp !== "off")
+  // whether the version was the admin's to choose, or is the old default
+  // this tier replaces
+  cfg.kiroVersionSet = Boolean(o?.kiroVersion || process.env.KIRO_VERSION)
+  cfg.nodeVersionSet = Boolean(o?.nodeVersion || process.env.KIRO_NODE_VERSION)
+  const over = (k, envKey) => (o?.[k] === undefined || o[k] === null ? (process.env[envKey] ? bool(process.env[envKey], null) : null) : bool(o[k], null))
+  cfg.fpDeviceId = over("fpDeviceId", "KIRO_FP_DEVICE_ID") ?? fpOn
+  cfg.fpProfile = over("fpProfile", "KIRO_FP_PROFILE") ?? fpOn
+  cfg.fpProxy = over("fpProxy", "KIRO_FP_PROXY") ?? fpOn
+  // what the profile says, per account unless the account brings its own
+  cfg.fpKiroVersion = String(pick("fpKiroVersion", "KIRO_FP_VERSION") || "")
+  cfg.fpNodeVersion = String(pick("fpNodeVersion", "KIRO_FP_NODE_VERSION") || "")
+  cfg.fpSystemVersion = String(pick("fpSystemVersion", "KIRO_FP_SYSTEM_VERSION") || "")
+  cfg.fpLocale = String(pick("fpLocale", "KIRO_FP_LOCALE") || "")
+  cfg.curlBin = String(pick("curlBin", "KIRO_CURL_BIN") || "")
+
   cfg.dropHidden = bool(pick("dropHidden", "KIRO_DROP_HIDDEN"), false)
   cfg.refusalReply = bool(pick("refusalReply", "KIRO_REFUSAL_REPLY"), false)
   const ip = String(pick("importPage", "KIRO_IMPORT_PAGE"))
@@ -558,6 +591,52 @@ function normalizeMachineId(id) {
   if (/^[0-9a-f]{32}$/.test(u) && s.length === 36) return u + u
   return ""
 }
+
+// ---- the fingerprint switch (fp) -----------------------------------------------------
+
+// fpFor is an account's device identity, from the account alone: the same
+// account always gets the same values, no two accounts share them. With
+// fpDeviceId off it is the old one id for the whole machine.
+function fpFor(a) {
+  const id = machineIdOf(cfg.fpDeviceId ? a : null)
+  if (!cfg.fpProfile) {
+    return { id, kiroVersion: cfg.kiroVersion, nodeVersion: cfg.nodeVersion, systemVersion: cfg.systemVersion, locale: "" }
+  }
+  // the profile's version is the one a client of this generation runs, not
+  // the 0.9.2 this file shipped with — unless an admin chose one
+  return {
+    id,
+    kiroVersion: String(a?.device?.kiroVersion || cfg.fpKiroVersion || (cfg.kiroVersionSet ? cfg.kiroVersion : "1.1.70")),
+    nodeVersion: String(a?.device?.nodeVersion || cfg.fpNodeVersion || (cfg.nodeVersionSet ? cfg.nodeVersion : "22.21.1")),
+    systemVersion: String(a?.device?.systemVersion || cfg.fpSystemVersion || cfg.systemVersion || systemVersion()),
+    locale: String(a?.device?.locale || cfg.fpLocale || "zh-CN"),
+  }
+}
+
+// fpHeaders fills in what the IDE's own client sends beside the SDK's
+// headers, and nothing it doesn't: no invented systemVersion/nodeVersion
+// header, which marks a request as not the client's faster than a missing
+// one does.
+function fpHeaders(h, fp) {
+  if (cfg.fpProfile && fp.locale) h["Accept-Language"] = h["Accept-Language"] || fp.locale
+  if (cfg.fpOn) h["x-amz-date"] = awsDate()
+  return h
+}
+const awsDate = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "")
+
+// fpProxy is an account's own way out, when the account names one, as the
+// bit to spread into a fetch: {} (nothing of magpie's to add), { proxy }
+// for a URL, or { proxy: undefined } for "direct", which still carries the
+// key so the host leaves it alone (host.js hands any init with a "proxy"
+// key straight to Bun, and Bun takes undefined as no proxy).
+function fpProxy(a) {
+  if (!cfg.fpProxy) return {}
+  const p = String(a?.proxyUrl ?? a?.proxy ?? "").trim()
+  if (!p) return {}
+  if (/^direct$/i.test(p)) return { proxy: undefined }
+  return /^(socks5h?|https?):\/\//i.test(p) ? { proxy: p } : {}
+}
+
 
 // ---- importing an exported account -----------------------------------------------------
 
@@ -1101,16 +1180,24 @@ function buildKiro(req, model, profile, think) {
 // kiroHeaders are the headers a generateAssistantResponse call says who
 // is calling with: the Kiro IDE's (aws-sdk-js, KiroIDE-<version>-<machine
 // id>, as kiro.rs sends them), or kiro-cli's (aws-sdk-rust).
-function kiroHeaders(a, attempt = 1, max = 1) {
+function kiroHeaders(a, attempt = 1, max) {
+  // with the fingerprint off the header says what it always said; on, it
+  // says what the SDK says (3), which is the one a client that never
+  // retries does not
+  if (max === undefined) max = cfg.fpOn ? 3 : 1
+  const fp = fpFor(a)
   let ua, xua
   if (cfg.fingerprint === "cli") {
-    ua = xua = `aws-sdk-rust/1.0.0 ua/2.1 os/other lang/rust api/codewhispererstreaming#1.28.3 m/E app/AmazonQ-For-CLI md/appVersion-1.28.3-${randomUUID().replaceAll("-", "")}`
+    // the instance kiro-cli names is the account's and stays the same
+    // request after request; a fresh one each time is a client no two
+    // requests of which look alike
+    const inst = cfg.fpDeviceId ? fp.id : randomUUID().replaceAll("-", "")
+    ua = xua = `aws-sdk-rust/1.0.0 ua/2.1 os/other lang/rust api/codewhispererstreaming#1.28.3 m/E app/AmazonQ-For-CLI md/appVersion-1.28.3-${inst}`
   } else {
-    const id = a.machineId || machineIdOf(null)
-    xua = `aws-sdk-js/1.0.34 KiroIDE-${cfg.kiroVersion}-${id}`
-    ua = `aws-sdk-js/1.0.34 ua/2.1 os/${cfg.systemVersion} lang/js md/nodejs#${cfg.nodeVersion} api/codewhispererstreaming#1.0.34 m/E KiroIDE-${cfg.kiroVersion}-${id}`
+    xua = `aws-sdk-js/1.0.34 KiroIDE-${fp.kiroVersion}-${fp.id}`
+    ua = `aws-sdk-js/1.0.34 ua/2.1 os/${fp.systemVersion} lang/js md/nodejs#${fp.nodeVersion} api/codewhispererstreaming#1.0.34 m/E KiroIDE-${fp.kiroVersion}-${fp.id}`
   }
-  return {
+  return fpHeaders({
     ...authHeaders(a),
     "Content-Type": "application/json",
     Accept: "application/vnd.amazon.eventstream",
@@ -1120,15 +1207,15 @@ function kiroHeaders(a, attempt = 1, max = 1) {
     "x-amzn-kiro-agent-mode": "vibe",
     "x-amz-user-agent": xua,
     "User-Agent": ua,
-  }
+  }, fp)
 }
 
 // chatURL is where the account's conversation goes: Kiro's runtime, or
 // the Q endpoint the IDE also speaks.
 const chatURL = (region) => (cfg.endpoint === "q" ? `https://q.${region}.amazonaws.com` : runtime(region)) + "/generateAssistantResponse"
 
-function sendKiro(a, body, signal, attempt = 1, max = 1) {
-  return fetch(chatURL(a.region), { method: "POST", headers: kiroHeaders(a, attempt, max), body, signal })
+function sendKiro(a, body, signal, attempt = 1, max) {
+  return fetch(chatURL(a.region), { method: "POST", headers: kiroHeaders(a, attempt, max), body, signal, ...fpProxy(a) })
 }
 
 // retryable is whether an answer is worth asking again: a throttle or a
@@ -2174,7 +2261,7 @@ function page(ok, title, text) {
 async function signInPost(url, body) {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": IDE_UA },
+    headers: { "Content-Type": "application/json", Accept: "application/json", "User-Agent": ideUa() },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
   })

@@ -189,6 +189,12 @@ read on the next request:
 | --- | --- | --- | --- |
 | `cacheRatio` | `KIRO_CACHE_RATIO` | `0` | 0–1: the share of the prompt reported as `cache_read_input_tokens` when Kiro reports no cache; `input_tokens` is the rest. Kiro's own cache figures, when given, stand. |
 | `fingerprint` | `KIRO_FINGERPRINT` | `ide` | `ide`: the Kiro IDE's headers (`aws-sdk-js/1.0.34 … KiroIDE-<version>-<machineId>`); `cli`: kiro-cli's, as before. |
+| `fp` | `KIRO_FP` | `safe` | The fingerprint switch. `off`: exactly the old behaviour (one machine id for the whole machine, no `Accept-Language`/`x-amz-date`, `amz-sdk-request` still `max=1`, no account proxy); `safe`: each account its own device identity and its own way out (recommended); `full`: `safe`, with the TLS-impersonation hook present but not wired yet — see `curlBin`. |
+| `fpDeviceId` | `KIRO_FP_DEVICE_ID` | follows `fp` | Each account its own machine id (the account's own, else derived from its refresh token). Off is the old one shared id, for A/B tests only. |
+| `fpProfile` | `KIRO_FP_PROFILE` | follows `fp` | Version, OS string and `Accept-Language` kept consistent per account, and the old `0.9.2` replaced by `1.1.70` (unless `KIRO_VERSION` names one). |
+| `fpProxy` | `KIRO_FP_PROXY` | follows `fp` | An account's own `proxyUrl` is used; `direct` means straight out, around magpie's global proxy; empty leaves the choice to magpie. |
+| `fpKiroVersion` / `fpNodeVersion` / `fpSystemVersion` / `fpLocale` | `KIRO_FP_VERSION` / `KIRO_FP_NODE_VERSION` / `KIRO_FP_SYSTEM_VERSION` / `KIRO_FP_LOCALE` | the account's, else `1.1.70` / `22.21.1` / this machine / `zh-CN` | Name the identity outright: over the defaults, under what the account carries. |
+| `curlBin` | `KIRO_CURL_BIN` | empty | The curl-impersonate binary `fp=full` is meant to send through (`curl_chrome116` and the like). Setting it does nothing yet; the TLS layer is not wired. |
 | `kiroVersion` | `KIRO_VERSION` | `0.9.2` | The Kiro IDE version the fingerprint names. |
 | `nodeVersion` | `KIRO_NODE_VERSION` | `22.21.1` | |
 | `systemVersion` | `KIRO_SYSTEM_VERSION` | this OS (`win32#10.0.22631`) | |
