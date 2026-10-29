@@ -2,6 +2,19 @@
 
 [English](README.en.md) · [简体中文](README.md)
 
+## 0.1.12-custom.17（2026-10-30）
+
+- 补上 GUI 开关：magpie 的供应商编辑器里现在有三个 “Plugin options”（`auth.options`），
+  开一次请求就生效，不用重启，也不用改 `providers.json`：
+  - **每个账号自己的设备指纹**（`fp-device-id`，默认开）
+  - **版本与操作系统自洽**（`fp-profile`，默认开）
+  - **账号自带代理优先**（`fp-proxy`，默认开）
+- 开关的读取用 `optBool` 而不是原有的 `switched`：后者把“用户关掉”读成“没声明”，
+  对这些只需要打开的开关没问题，但对默认开、必须能关的指纹开关是错的。
+- `fpOn` 跟着这两个开关走（任一打开即是开），关掉两个就等价于 `fp=off`：
+  不补 `x-amz-date`、`amz-sdk-request` 回到 `max=1`。
+- `providers.json` 里的 `options.fp` 仍然有效，开关是它的逐项覆盖。
+
 ## 0.1.12-custom.16（2026-10-30）
 
 - 新增指纹开关 `fp`（`KIRO_FP`），三档：`off` / `safe`（默认）/ `full`。

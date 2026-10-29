@@ -177,7 +177,7 @@ test("a model with no measured prompt, and an estimate Kiro never sized, are lef
 })
 
 test("the provider's editor has switches, and the next request reads them", async () => {
-  const chosen = { web: false, "drop-hidden": false }
+  const chosen = { web: false, "drop-hidden": false, "fp-device-id": true, "fp-profile": true, "fp-proxy": true }
   const magpie = { option: (id, key) => id === "kiro-custom" && chosen[key] === true }
   const { KiroAuthPlugin } = await import("./index.mjs")
   const hooks = await KiroAuthPlugin({ client: { auth: { set: async () => {} } }, magpie }, { retries: 0 })
@@ -185,6 +185,9 @@ test("the provider's editor has switches, and the next request reads them", asyn
     ["web", "Kiro Web", false],
     ["drop-hidden", "去掉 Kiro 自带提示", false],
     ["refusal-reply", "拒答按 Claude 原样返回", false],
+    ["fp-device-id", "每个账号自己的设备指纹", true],
+    ["fp-profile", "版本与操作系统自洽", true],
+    ["fp-proxy", "账号自带代理优先", true],
   ])
   expect(hooks.auth.options.every((o) => o.description)).toBe(true)
   const auth = { type: "oauth", access: "test-access", refresh: "test-refresh", expires: Date.now() + 3600_000, method: "social",
@@ -207,6 +210,20 @@ test("the provider's editor has switches, and the next request reads them", asyn
   expect(origins).toEqual(["KIRO_CLI", "KIRO_WEB"])
   expect(_internal.cfg.dropHidden).toBe(true)
   expect(_internal.cfg.refusalReply).toBe(true)
+  // the fingerprint switches read the same way, and a "no" is a value:
+  // turned off in the panel they must come out off, not left on
+  expect(_internal.cfg.fpDeviceId).toBe(true)
+  expect(_internal.cfg.fpProfile).toBe(true)
+  expect(_internal.cfg.fpProxy).toBe(true)
+  expect(_internal.cfg.fpOn).toBe(true)
+  chosen["fp-device-id"] = false
+  chosen["fp-profile"] = false
+  chosen["fp-proxy"] = false
+  await ask()
+  expect(_internal.cfg.fpDeviceId).toBe(false)
+  expect(_internal.cfg.fpProfile).toBe(false)
+  expect(_internal.cfg.fpProxy).toBe(false)
+  expect(_internal.cfg.fpOn).toBe(false)
 })
 
 test("web says each message comes from Kiro Web", () => {

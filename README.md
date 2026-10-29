@@ -106,7 +106,8 @@ magpie 在还有别的 Kiro 账号可以换时，会把 Claude 只有思考、�
 | `fpProxy` | `KIRO_FP_PROXY` | 跟随 `fp` | 账号自带 `proxyUrl` 就用它，`direct` 表示显式直连（绕过 magpie 的全局代理），没写则交给 magpie 选。 |
 | `fpKiroVersion` / `fpNodeVersion` / `fpSystemVersion` / `fpLocale` | `KIRO_FP_VERSION` / `KIRO_FP_NODE_VERSION` / `KIRO_FP_SYSTEM_VERSION` / `KIRO_FP_LOCALE` | 账号自带，否则 `1.1.70` / `22.21.1` / 本机 / `zh-CN` | 显式指定这套身份，优先级高于默认、低于账号自带的值。 |
 | `curlBin` | `KIRO_CURL_BIN` | 空 | `fp=full` 时打算用的 curl-impersonate 可执行文件（如 `curl_chrome116`）。现在填了也不生效，等 TLS 那层接上。 |
-| `kiroVersion` | `KIRO_VERSION` | `0.9.2` | 指纹里的 Kiro IDE 版本。 |
+
+这三个开关在 magpie 的供应商编辑器里也能直接改（「Plugin options」下的三个开关），改完下一个请求就生效，不用重启，也不用编辑 `providers.json`：**每个账号自己的设备指纹**、**版本与操作系统自洽**、**账号自带代理优先**。`providers.json` 的 `options.fp` 仍然有效，开关是它的逐项覆盖。| `kiroVersion` | `KIRO_VERSION` | `0.9.2` | 指纹里的 Kiro IDE 版本。 |
 | `nodeVersion` | `KIRO_NODE_VERSION` | `22.21.1` | |
 | `systemVersion` | `KIRO_SYSTEM_VERSION` | 本机系统（`win32#10.0.22631`） | |
 | `endpoint` | `KIRO_ENDPOINT` | `kiro` | `kiro`：`runtime.<region>.kiro.dev`；`q`：`q.<region>.amazonaws.com`。 |

@@ -195,7 +195,8 @@ read on the next request:
 | `fpProxy` | `KIRO_FP_PROXY` | follows `fp` | An account's own `proxyUrl` is used; `direct` means straight out, around magpie's global proxy; empty leaves the choice to magpie. |
 | `fpKiroVersion` / `fpNodeVersion` / `fpSystemVersion` / `fpLocale` | `KIRO_FP_VERSION` / `KIRO_FP_NODE_VERSION` / `KIRO_FP_SYSTEM_VERSION` / `KIRO_FP_LOCALE` | the account's, else `1.1.70` / `22.21.1` / this machine / `zh-CN` | Name the identity outright: over the defaults, under what the account carries. |
 | `curlBin` | `KIRO_CURL_BIN` | empty | The curl-impersonate binary `fp=full` is meant to send through (`curl_chrome116` and the like). Setting it does nothing yet; the TLS layer is not wired. |
-| `kiroVersion` | `KIRO_VERSION` | `0.9.2` | The Kiro IDE version the fingerprint names. |
+
+These switches are also drawn in magpie's provider editor ("Plugin options"), and a change reaches the plugin on the next request — no restart, no `providers.json` edit: **each account its own device identity**, **version and OS kept consistent**, **an account's own proxy first**. `options.fp` in `providers.json` still works; the switches override it one part at a time.| `kiroVersion` | `KIRO_VERSION` | `0.9.2` | The Kiro IDE version the fingerprint names. |
 | `nodeVersion` | `KIRO_NODE_VERSION` | `22.21.1` | |
 | `systemVersion` | `KIRO_SYSTEM_VERSION` | this OS (`win32#10.0.22631`) | |
 | `endpoint` | `KIRO_ENDPOINT` | `kiro` | `kiro`: `runtime.<region>.kiro.dev`; `q`: `q.<region>.amazonaws.com`. |

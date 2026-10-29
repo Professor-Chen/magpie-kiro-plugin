@@ -2740,6 +2740,15 @@ export async function KiroAuthPlugin({ client, magpie } = {}, options = {}) {
   // else the default declared below (itself this entry's options, or the
   // environment). OpenCode has no editor for them and leaves cfg as configure set it.
   const switched = (key) => (typeof magpie?.option === "function" ? magpie.option(ID, key) === true : null)
+  // optBool is the user's value for an option whose off means something:
+  // switched() reads a "no" as "not this plugin's option", which is right
+  // for a switch that can only add behaviour and wrong for a fingerprint
+  // one that has to be turned off again.
+  const optBool = (key, fallback) => {
+    if (typeof magpie?.option !== "function") return fallback
+    const v = magpie.option(ID, key)
+    return typeof v === "boolean" ? v : fallback
+  }
   return {
     auth: {
       provider: ID,
@@ -2753,6 +2762,12 @@ export async function KiroAuthPlugin({ client, magpie } = {}, options = {}) {
           description: "报出的用量去掉 Kiro 自己加的那段提示，先从缓存扣，再从全新输入扣。回复的 token 不变。Kiro 没给出上下文大小时不扣。" },
         { key: "refusal-reply", label: "拒答按 Claude 原样返回", default: cfg.refusalReply,
           description: "一个字都没写出就被拒答时，按 Anthropic 的样子回 200：不带正文，stop_reason: refusal，原因在 stop_details，用量为 0。Claude Code 直连 magpie 时会换备用模型。关着是 400 报错，new-api 记错误、不扣费。" },
+        { key: "fp-device-id", label: "每个账号自己的设备指纹", default: true,
+          description: "开：每个账号带自己的 machineId（账号自带的，否则按 refreshToken 派生），一池账号就是多台机器。关：全机共用一个，只做对照测试用。" },
+        { key: "fp-profile", label: "版本与操作系统自洽", default: true,
+          description: "开：Kiro 版本按 1.1.70，操作系统与 Accept-Language 按账号自洽。关：沿用旧的 0.9.2，不补 Accept-Language。" },
+        { key: "fp-proxy", label: "账号自带代理优先", default: true,
+          description: "开：账号写了 proxyUrl 就走它，direct 表示显式直连。关：一律交给 magpie 的全局代理。" },
       ],
       // magpie renews a sign-in kept here LEAD_MS before its end, once for
       // the account, before its requests, models and usage ask for it; the
@@ -2789,6 +2804,12 @@ export async function KiroAuthPlugin({ client, magpie } = {}, options = {}) {
             if (web !== null) cfg.web = web
             if (drop !== null) cfg.dropHidden = drop
             if (reply !== null) cfg.refusalReply = reply
+            // the fingerprint switches, read the same way: off is a value
+            // here, not "unset", so the panel can turn them back off
+            cfg.fpDeviceId = optBool("fp-device-id", cfg.fpDeviceId)
+            cfg.fpProfile = optBool("fp-profile", cfg.fpProfile)
+            cfg.fpProxy = optBool("fp-proxy", cfg.fpProxy)
+            cfg.fpOn = cfg.fpDeviceId || cfg.fpProfile
             return generate(creds, (await getAuth()) ?? auth, req, init.signal)
           },
         }
