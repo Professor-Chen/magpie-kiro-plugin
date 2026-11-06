@@ -4,8 +4,11 @@
 // and as an entry of the tools (the CodeWhisperer streaming model's
 // UserInputMessage.cachePoint, AssistantResponseMessage.cachePoint and
 // Tool::CachePoint; Kiro CLI 2.27's model list tells
-// supportsPromptCaching and maximumCacheCheckpointsPerRequest). The plugin
-// dropped every cache_control, so Kiro was never asked to cache.
+// supportsPromptCaching and maximumCacheCheckpointsPerRequest). Tried
+// with a real account on 2026-10-24, Kiro caches a repeated prompt without
+// them too (the second call billed about half the credits, marked or not,
+// and kiro-cli 2.32 sends none); the marks stay as the caller's intent.
+// Why magpie showed 0% is cache-unknown.test.mjs: Kiro reports no tokens.
 import { expect, test } from "bun:test"
 import { _internal } from "./index.mjs"
 

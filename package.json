@@ -1,11 +1,11 @@
 {
   "name": "opencode-kiro-custom",
-  "version": "0.1.12-custom.18",
+  "version": "0.1.26-custom.1",
   "description": "Unofficial Kiro subscriptions (Free, Pro, Pro+, Power) for OpenCode and magpie. Provider id kiro-custom, beside the official Kiro plugin.",
   "type": "module",
-  "main": "./index.mjs",
-  "exports": "./index.mjs",
-  "files": ["index.mjs", "import.html", "README.md", "README.en.md", "CHANGELOG.md"],
+  "main": "./opencode.mjs",
+  "exports": { ".": "./opencode2.mjs" },
+  "files": ["index.mjs", "opencode.mjs", "opencode2.mjs", "import.html", "README.md", "README.en.md", "CHANGELOG.md"],
   "keywords": ["opencode", "opencode-plugin", "magpie", "kiro"],
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/Professor-Chen/magpie-kiro-plugin.git" }

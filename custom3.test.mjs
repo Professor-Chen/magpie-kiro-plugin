@@ -299,7 +299,7 @@ test("refusalReply answers a refusal before a word as Anthropic does: a 200, not
   const details = { type: "refusal", category: "bio", explanation: "The selected model cannot continue this conversation." }
   const zero = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
   const evs = await all(events(frames(), model, null, 100))
-  expect(evs).toEqual([{ kind: "stop", reason: "refusal", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, details, free: true }])
+  expect(evs).toEqual([{ kind: "stop", reason: "refusal", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reported: true }, details, free: true }])
   const whole = await reply(events(frames(), model, null, 100), model, false)
   expect(whole.status).toBe(200)
   expect(await whole.json()).toMatchObject({ content: [], stop_reason: "refusal", stop_details: details, usage: zero })

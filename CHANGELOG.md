@@ -2,6 +2,31 @@
 
 [English](README.en.md) · [简体中文](README.md)
 
+## 0.1.26-custom.1（2026-11-06）
+
+合入上游 `@magpie-community/opencode-kiro-auth` 0.1.12 至 0.1.26，custom.13 到 custom.18 的改动全部保留（指纹、按账号缓存 token、拒答、重试、限速、封号识别、计量）。
+
+上游带来的：
+- 结构化输出（0.1.12）：`output_config.format` 的 JSON schema 写进 system prompt。
+- 同一邮箱的 Google 和 GitHub 登录算两个账号，名字显示成"email (Google)"（0.1.13 / 0.1.14）。
+- API key 按 kiro-cli 的方式用：聊天请求不带 profile（0.1.15）。
+- Kiro 没报 token 数时，缓存记为未知（`magpie_cache_unknown`）而不是 0（0.1.16）。本 fork 用计量（`meter`）或 `cacheRatio` 算出缓存时仍照常报出缓存数。
+- 额度带具体数字（`amount` / `limit`），magpie 的"Left"能显示剩余量（0.1.17）。
+- 图片的 Base64 超过 Kiro 的 5 MiB 上限时，在发出的请求上压缩，压不下就换成一段说明，历史里的那张也一样（0.1.18）。需要宿主的 Bun 有 `Bun.Image`（1.4 起）。
+- 登录被拒时把账号标成已登出（0.1.19）。
+- 工具的 input schema 根上缺 `type` 时补成 object；支持 Anthropic 托管的联网搜索，由 Kiro 自己的 web_search 执行（0.1.20）。联网搜索也走账号的指纹头和代理。
+- 远程 magpie 可以选直连 AWS 的 Builder ID / Identity Center 登录（0.1.21）。登录方式菜单已译成中文。
+- 末尾的 system 内容（Claude Code 的环境上下文）挪到问题前面，成为单独一轮；xhigh、max 按 Kiro 列表里的 effort 档位发（0.1.22）。
+- 只给 effort、没开 thinking 时不再要求思考（0.1.23，上游 #538）。原生思考的模型（Opus / Sonnet 4.7 起）这时仍按 fork 原有做法发 `effort: low`，因为它不管怎么问都会思考。
+- 对话超出模型上下文窗口时返回 400，并写明"input is too long for the model's context"，magpie 会换窗口更大的号，不让账号休息（0.1.24）。
+- 用量卡片显示赠送额度和过期时间（0.1.25）。
+- OpenCode 2.x 入口：`opencode.mjs`（main）和 `opencode2.mjs`（exports）。
+
+和上游不同、保留 fork 原样的：
+- `max` 的思考预算仍是 64000（上游是 50000），`budgets` 可配。
+- 哪些模型按字段发 effort：先看 Kiro 模型列表里的 `additionalModelRequestFieldsSchema`，列表没提到的模型再按名字判断（Opus / Sonnet 4.7 及以后）。
+- 5xx、限流、网络错误按 `retries` 重试；图片只压一次，每次重试发同一个请求体。
+
 ## 0.1.12-custom.18（2026-10-30）
 
 - 修一个会把账号池里别的号的 token 拿去用的 bug：`creds()` 用

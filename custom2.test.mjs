@@ -3,13 +3,16 @@
 // told from one quoted, tool calls said in words, a description cut, an
 // empty reply tried again, a suspended account marked, pacing. No network:
 // fetch is stood in for, and the tokens are made up.
-import { test, expect, afterEach } from "bun:test"
+import { test, expect, afterEach, beforeEach } from "bun:test"
 import { _internal } from "./index.mjs"
 
-const { thinking, thinkingPrefix, effortField, configure, BUDGETS, buildKiro, events, reply, TextCalls, realClose, refreshUA, generate, configModel } =
+const { natives, thinking, thinkingPrefix, effortField, configure, BUDGETS, buildKiro, events, reply, TextCalls, realClose, refreshUA, generate, configModel } =
   _internal
 
 const real = globalThis.fetch
+// which models think by their own fields is read from Kiro's list once one
+// is listed (another test file may have); these tests go by the names
+beforeEach(() => natives.clear())
 afterEach(() => {
   globalThis.fetch = real
   configure({})
@@ -18,13 +21,13 @@ afterEach(() => {
 // ---- the thinking levels -----------------------------------------------------------
 
 test("each effort its own budget, max past xhigh", () => {
-  const b = (effort, model = "claude-opus-5.5") => thinking({ output_config: { effort } }, model)?.budget
+  const b = (effort, model = "claude-opus-5.5") => thinking({ thinking: { type: "adaptive" }, output_config: { effort } }, model)?.budget
   expect([b("medium"), b("high"), b("xhigh"), b("max")]).toEqual([20000, 30000, 50000, 64000])
-  // low alone asks no thinking; asked to think, it is low's budget
-  expect(thinking({ output_config: { effort: "low" } }, "claude-opus-5.5")).toBeNull()
+  // an effort alone asks no thinking (upstream #538); asked to think, low is low's budget
+  expect(thinking({ output_config: { effort: "high" } }, "claude-opus-5.5")).toBeNull()
   expect(thinking({ thinking: { type: "enabled" }, output_config: { effort: "low" } }, "claude-opus-5.5").budget).toBe(10000)
   // a model that doesn't think, or thinking turned off, asks none
-  expect(thinking({ output_config: { effort: "high" } }, "deepseek-3.2")).toBeNull()
+  expect(thinking({ thinking: { type: "enabled" }, output_config: { effort: "high" } }, "deepseek-3.2")).toBeNull()
   expect(thinking({ thinking: { type: "disabled" }, output_config: { effort: "high" } }, "claude-opus-5.5")).toBeNull()
 })
 
@@ -33,7 +36,7 @@ test("the caller's budget_tokens, within the bounds", () => {
   expect(thinking({ thinking: { type: "enabled", budget_tokens: 10 } }, "auto").budget).toBe(1024)
   expect(thinking({ thinking: { type: "enabled", budget_tokens: 999999 } }, "auto").budget).toBe(64000)
   configure({ thinkingMax: 32000 })
-  expect(thinking({ output_config: { effort: "max" } }, "claude-x").budget).toBe(32000)
+  expect(thinking({ thinking: { type: "adaptive" }, output_config: { effort: "max" } }, "claude-x").budget).toBe(32000)
 })
 
 test("budgets can be set, as options or the environment", () => {
@@ -63,7 +66,7 @@ test("adaptive thinking goes as a length by default, kiro-cli's adaptive mode wh
 })
 
 test("a native thinker (Opus/Sonnet 4.7 and later) is asked by its own fields, not the prompt", () => {
-  const req = { output_config: { effort: "xhigh" }, messages: [{ role: "user", content: "hi" }] }
+  const req = { thinking: { type: "adaptive" }, output_config: { effort: "xhigh" }, messages: [{ role: "user", content: "hi" }] }
   const t = thinking(req, "claude-opus-5.5")
   expect(t.native).toBe(true)
   const body = JSON.parse(buildKiro(req, "claude-opus-5.5", "", t))
@@ -81,7 +84,7 @@ test("a native thinker (Opus/Sonnet 4.7 and later) is asked by its own fields, n
 
 test("4.6, 4.5, Haiku and other models think by the prompt, never sent the field", () => {
   for (const m of ["claude-sonnet-4.6", "claude-opus-4.6", "claude-sonnet-4.5", "claude-haiku-4.5", "auto"]) {
-    const req = { output_config: { effort: "high" }, messages: [{ role: "user", content: "hi" }] }
+    const req = { thinking: { type: "adaptive" }, output_config: { effort: "high" }, messages: [{ role: "user", content: "hi" }] }
     const t = thinking(req, m)
     expect(t.native).toBe(false)
     const body = JSON.parse(buildKiro(req, m, "", t))
@@ -92,7 +95,7 @@ test("4.6, 4.5, Haiku and other models think by the prompt, never sent the field
 
 test("effortField off asks every model by the prompt", () => {
   configure({ effortField: "off" })
-  const req = { output_config: { effort: "high" }, messages: [{ role: "user", content: "hi" }] }
+  const req = { thinking: { type: "adaptive" }, output_config: { effort: "high" }, messages: [{ role: "user", content: "hi" }] }
   const t = thinking(req, "claude-opus-5.5")
   const body = JSON.parse(buildKiro(req, "claude-opus-5.5", "", t))
   expect(body.additionalModelRequestFields).toBeUndefined()
@@ -100,7 +103,7 @@ test("effortField off asks every model by the prompt", () => {
 })
 
 test("a prompt that already says how to think isn't told twice", () => {
-  const t = thinking({ output_config: { effort: "high" } }, "auto")
+  const t = thinking({ thinking: { type: "enabled" }, output_config: { effort: "high" } }, "auto")
   const sys = "<thinking_mode>enabled</thinking_mode><max_thinking_length>5</max_thinking_length>\nbe brief"
   const s = JSON.parse(buildKiro({ system: sys, messages: [{ role: "user", content: "hi" }] }, "auto", "", t)).conversationState
   expect(s.currentMessage.userInputMessage.content.match(/<thinking_mode>/g)).toHaveLength(1)
@@ -110,7 +113,7 @@ test("a prompt that already says how to think isn't told twice", () => {
 
 test("what the model thought goes back in the history, thinking still asked", () => {
   const req = {
-    output_config: { effort: "high" },
+    thinking: { type: "adaptive" }, output_config: { effort: "high" },
     messages: [
       { role: "user", content: "add 2 and 2" },
       { role: "assistant", content: [{ type: "thinking", thinking: "2+2 is 4", signature: "" }, { type: "text", text: "4" }] },
@@ -121,7 +124,7 @@ test("what the model thought goes back in the history, thinking still asked", ()
   const h = JSON.parse(buildKiro(req, "claude-sonnet-4.5", "", t)).conversationState.history
   expect(h[1].assistantResponseMessage.content).toBe("<thinking>2+2 is 4</thinking>\n\n4")
   // not asked to think, the history goes without it
-  const h2 = JSON.parse(buildKiro({ ...req, output_config: {} }, "claude-sonnet-4.5", "", null)).conversationState.history
+  const h2 = JSON.parse(buildKiro({ ...req, thinking: undefined, output_config: {} }, "claude-sonnet-4.5", "", null)).conversationState.history
   expect(h2[1].assistantResponseMessage.content).toBe("4")
   // a native thinker's reasoning was its own, not its words: not sent back
   const h3 = JSON.parse(buildKiro(req, "claude-opus-5.5", "", thinking(req, "claude-opus-5.5"))).conversationState.history
@@ -131,7 +134,7 @@ test("what the model thought goes back in the history, thinking still asked", ()
 const reasoning = (t) => frame({ ":message-type": "event", ":event-type": "reasoningContentEvent" }, { text: t })
 
 test("a native thinker's reasoning is thinking when asked, hidden when not", async () => {
-  const native = thinking({ output_config: { effort: "high" } }, "claude-opus-5.5")
+  const native = thinking({ thinking: { type: "adaptive" }, output_config: { effort: "high" } }, "claude-opus-5.5")
   const asked = await all(events(body(reasoning("let me "), reasoning("see"), text("<thinking>not a tag here")), "claude-opus-5.5", native))
   expect(joined(asked, "think")).toBe("let me see")
   // the reply's words are text, a "<thinking>" in them included
